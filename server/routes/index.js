@@ -327,26 +327,34 @@ router.post('/generate', auth, async (req, res) => {
             extension: '.png'
         };
 
-        // Normalize all user data to uppercase
-        const normalizedData = {};
-        Object.keys(data).forEach(key => {
-            if (typeof data[key] === 'string') {
-                normalizedData[key] = data[key].toUpperCase();
-            } else {
-                normalizedData[key] = data[key];
-            }
-        });
-
+        // Normalize all user data: provide both original, UPPERCASE, and lowercase keys for maximum compatibility
         const finalData = {
-            ...normalizedData,
-            CERTIFICATE_ID: uniqueId, // Main ID (keeps its casing)
+            CERTIFICATE_ID: uniqueId,
             certificate_id: uniqueId,
-            "Certificate ID": uniqueId,
-            CERTIFICATEID: uniqueId,
-            ID: uniqueId,
             QR: qrImage,
-            QRCODE: qrImage
+            qr: qrImage,
+            QRCODE: qrImage,
+            qrcode: qrImage
         };
+
+        if (data && typeof data === 'object') {
+            Object.keys(data).forEach(key => {
+                const value = data[key];
+                const upperValue = typeof value === 'string' ? value.toUpperCase() : value;
+
+                // Add various key casings
+                finalData[key] = upperValue;
+                finalData[key.toUpperCase()] = upperValue;
+                finalData[key.toLowerCase()] = upperValue;
+            });
+        }
+
+        // Add specific mappings for common certificate tags
+        finalData["Certificate ID"] = uniqueId;
+        finalData["ID"] = uniqueId;
+        finalData["QR_CODE"] = qrImage;
+        finalData["IMAGE QR"] = qrImage;
+        finalData["image qr"] = qrImage;
 
         // Read template once
         let templateBuffer = fs.readFileSync(template.filePath);
@@ -365,6 +373,12 @@ router.post('/generate', auth, async (req, res) => {
                     const rawTag = m[1].trim();
                     const capsTag = rawTag.toUpperCase();
 
+                    // If it's a QR related tag, ensure it's mapped to the QR image
+                    if (capsTag.includes('QR')) {
+                        finalData[rawTag] = qrImage;
+                        finalData[capsTag] = qrImage;
+                    }
+
                     // If it's an image command like {{IMAGE qr}}, map the data from finalData['QR']
                     if (capsTag.startsWith('IMAGE ') && rawTag !== capsTag) {
                         const dataKey = capsTag.replace('IMAGE ', '');
@@ -377,6 +391,7 @@ router.post('/generate', auth, async (req, res) => {
                     const idTags = ['CERTIFICATE_ID', 'CERTIFICATE ID', 'CERTIFICATEID', 'ID', 'UNIQUE_ID', 'DOC_ID'];
                     if (idTags.includes(capsTag)) {
                         finalData[rawTag] = uniqueId;
+                        finalData[capsTag] = uniqueId;
                     } else if (finalData[capsTag] !== undefined && finalData[rawTag] === undefined) {
                         finalData[rawTag] = finalData[capsTag];
                     }
@@ -384,23 +399,17 @@ router.post('/generate', auth, async (req, res) => {
             });
 
             // --- NUCLEAR PRE-PROCESSOR: Bridge any and all XML fragmentation ---
-            // Re-use zip and xmlFiles from above
-            const nuclearQrRegex = /\{(<[^>]+>)*\{(<[^>]+>)*\s*[qQ](<[^>]+>)*[rR](<[^>]+>)*\s*\}(<[^>]+>)*\}/g;
-            const nuclearQrCodeRegex = /\{(<[^>]+>)*\{(<[^>]+>)*\s*[qQ](<[^>]+>)*[rR](<[^>]+>)*[cC](<[^>]+>)*[oO](<[^>]+>)*[dD](<[^>]+>)*[eE](<[^>]+>)*\s*\}(<[^>]+>)*\}/g;
+            // This regex catches {{QR}}, {{qr}}, {{qrcode}}, {{IMAGE qr}}, etc. even if fragmented.
+            // It allows for any XML tags (<...>) and whitespace between the brackets and the core letters.
+            const aggressiveQrRegex = /\{(<[^>]+>)*\{\s*(?:[iI][mM][aA][gG][eE]\s+)?(?:<[^>]+>)*[qQ](?:<[^>]+>)*[rR](?:<[^>]+>)*[cC]?[oO]?[dD]?[eE]?(?:<[^>]+>)*\s*\}(<[^>]+>)*\}/g;
 
             let transformed = false;
             xmlFiles.forEach(file => {
                 let content = file.asText();
-                let docTransformed = false;
-
-                if (nuclearQrRegex.test(content) || nuclearQrCodeRegex.test(content)) {
-                    console.log(`📦 Nuclear scan found fragmented QR tag in ${file.name}, fixing...`);
-                    content = content.replace(nuclearQrRegex, '{{IMAGE QR}}');
-                    content = content.replace(nuclearQrCodeRegex, '{{IMAGE QR}}');
-                    docTransformed = true;
-                }
-
-                if (docTransformed) {
+                if (aggressiveQrRegex.test(content)) {
+                    console.log(`📦 Nuclear scan found QR tag in ${file.name}, ensuring {{IMAGE QR}} format...`);
+                    // Use a function for replace to avoid issues with captured groups if any
+                    content = content.replace(aggressiveQrRegex, '{{IMAGE QR}}');
                     zip.file(file.name, content);
                     transformed = true;
                 }
@@ -425,11 +434,13 @@ router.post('/generate', auth, async (req, res) => {
                 }
             });
         } catch (error) {
+            console.error('❌ Template filling error:', error);
+            if (error.properties) console.error('Error Details:', JSON.stringify(error.properties, null, 2));
 
-            console.error('❌ Template filling error:', error.message);
             return res.status(400).json({
                 error: 'Template formatting issue',
-                details: error.message
+                details: error.message,
+                stack: error.stack
             });
         }
 
