@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: verifycert-onlyoffice
+    ports:
+      - "8080:80"
+    environment:
+      - JWT_ENABLED=false
+      - DS_DENY_PRIVATE_IP=false
+      - DS_DENY_PRIVATE_IP_RESOLVED=false
+    volumes:
+      - onlyoffice_data:/var/www/onlyoffice/Data
+      - onlyoffice_log:/var/log/onlyoffice
+    restart: unless-stopped
+
+volumes:
+  onlyoffice_data:
+  onlyoffice_log:
+
