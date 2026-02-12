@@ -32,21 +32,20 @@ export const useDocxTemplate = () => {
             const zip = new PizZip(arrayBuffer);
             const xmlFiles = zip.file(/\.xml$/);
 
+            const bodyMatches = []; // Only count from main source to avoid duplicates
             const allMatches = new Set();
-            const rawMatches = [];
             const regex = /\{\{(.*?)\}\}/g;
 
             xmlFiles.forEach(file => {
                 try {
                     const content = file.asText();
-                    // Strip XML tags to bridge fragmentation
                     const cleanText = content.replace(/<[^>]+>/g, '');
                     let match;
                     while ((match = regex.exec(cleanText)) !== null) {
-                        const tag = match[1].trim();
+                        const tag = match[1].trim().toUpperCase();
                         if (tag) {
-                            rawMatches.push(tag.toUpperCase());
-                            allMatches.add(tag.toUpperCase());
+                            bodyMatches.push(tag);
+                            allMatches.add(tag);
                         }
                     }
                 } catch (err) {
@@ -54,18 +53,16 @@ export const useDocxTemplate = () => {
                 }
             });
 
-            // Back-up: Mammoth (Standard Text Scan)
+            // Back-up Detection: Mammoth (Only add to Set, don't double count for duplicate warning)
             try {
                 const result = await mammoth.extractRawText({ arrayBuffer });
                 if (result && result.value) {
                     let match;
-                    // Reset regex index for safety
                     regex.lastIndex = 0;
                     while ((match = regex.exec(result.value)) !== null) {
-                        const tag = match[1].trim();
+                        const tag = match[1].trim().toUpperCase();
                         if (tag) {
-                            rawMatches.push(tag.toUpperCase());
-                            allMatches.add(tag.toUpperCase());
+                            allMatches.add(tag);
                         }
                     }
                 }
@@ -77,9 +74,9 @@ export const useDocxTemplate = () => {
             const systemTags = ['QR', 'QRCODE', 'CERTIFICATE_ID', 'IMAGE QR', 'IMAGE_QR', 'CERTIFICATEID', 'ID'];
             const finalPlaceholders = Array.from(allMatches).filter(p => !systemTags.includes(p));
 
-            // Find true duplicates
+            // Find true duplicates (using only the XML source to avoid double-counting with Mammoth)
             const counts = {};
-            rawMatches.forEach(tag => {
+            bodyMatches.forEach(tag => {
                 if (!systemTags.includes(tag)) {
                     counts[tag] = (counts[tag] || 0) + 1;
                 }
