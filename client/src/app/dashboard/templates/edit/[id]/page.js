@@ -95,9 +95,12 @@ export default function TemplateEditorPage() {
     useEffect(() => {
         if (!scriptLoaded || !editorConfig || editorReady) return;
         if (!window.DocsAPI) {
+            console.error('❌ OnlyOffice window.DocsAPI not found even though script reported loaded');
             setError('OnlyOffice API not available. Make sure Document Server is running.');
             return;
         }
+
+        console.log('🏗️ Initializing OnlyOffice Editor with config:', JSON.stringify(editorConfig, null, 2));
 
         // Destroy existing editor if any
         if (editorRef.current) {
@@ -231,7 +234,7 @@ export default function TemplateEditorPage() {
     }
 
     return (
-        <div className="animate-fade-in h-full flex flex-col -mx-8 -mb-8 -mt-4">
+        <div className="animate-fade-in flex flex-col -mx-8 -mb-8 -mt-4 overflow-hidden" style={{ height: 'calc(100vh - 120px)' }}>
             {/* Editor Toolbar */}
             <div className="bg-card border-b border-border px-6 py-3 flex items-center justify-between shrink-0 z-20">
                 <div className="flex items-center gap-4">

@@ -13,6 +13,12 @@ const mammoth = require('mammoth');
 const Template = require('../models/Template');
 const auth = require('../middleware/auth');
 
+// Middleware to log all requests to this router
+router.use((req, res, next) => {
+    console.log(`📡 [OnlyOffice API] ${req.method} ${req.url} - IP: ${req.ip}`);
+    next();
+});
+
 // ============================================================
 // CONFIG
 // ============================================================
