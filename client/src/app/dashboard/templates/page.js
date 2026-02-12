@@ -1,5 +1,6 @@
 "use client";
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useUI } from '@/context/UIContext';
 import {
     Card,
@@ -7,7 +8,6 @@ import {
     FileUpload,
     Guidelines
 } from '@/components';
-import mammoth from 'mammoth';
 import Link from 'next/link';
 import { uploadTemplate } from '@/services/TemplateLib';
 
@@ -15,6 +15,7 @@ import { useDocxTemplate } from '@/hooks';
 
 export default function TemplatesPage() {
     const { showAlert } = useUI();
+    const router = useRouter();
     const {
         file,
         setFile,
@@ -26,33 +27,49 @@ export default function TemplatesPage() {
 
     const [loading, setLoading] = useState(false);
     const [showBuffer, setShowBuffer] = useState(false);
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+    const onFileSelected = async (e) => {
+        // Stop any event propagation that might trigger a form submit or parent action
+        if (e.stopPropagation) e.stopPropagation();
+
+        try {
+            await handleFileChange(e);
+        } catch (err) {
+            console.error("Selection error:", err);
+        }
+    };
 
     const handleUpload = async (e) => {
-        e.preventDefault();
-        if (!file) return;
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        if (!file || loading) return;
 
         setLoading(true);
 
         const formData = new FormData();
         formData.append('file', file);
+        formData.append('name', file.name.replace(/\.[^/.]+$/, ""));
 
         try {
             await uploadTemplate(formData);
-            resetFile();
-            e.target.reset();
 
             setShowBuffer(true);
+            setLoading(false);
+
             setTimeout(() => {
-                setShowBuffer(false);
-                // Redirect to library after analysis
-                window.location.href = '/dashboard/existing-templates';
-            }, 1500);
+                router.push('/dashboard/existing-templates');
+            }, 1800);
+
         } catch (err) {
-            console.error(err);
-            const errorMsg = err.response?.data?.error || 'Check your template format';
+            console.error('Upload Error:', err);
+            setLoading(false);
+            const errorMsg = err.response?.data?.error || err.message || 'Failed to upload template.';
             showAlert('Upload Failed', errorMsg, 'error');
         }
-        setLoading(false);
     };
 
     return (
@@ -87,7 +104,7 @@ export default function TemplatesPage() {
                         <form onSubmit={handleUpload} className="space-y-6">
                             <FileUpload
                                 file={file}
-                                onFileChange={handleFileChange}
+                                onFileChange={onFileSelected}
                                 accept=".docx"
                                 placeholder="Click or drag .docx template"
                                 helperText="Word document with {{placeholders}}"
