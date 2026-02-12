@@ -70,6 +70,25 @@ export const getTemplatePlaceholders = async (templateId) => {
     return get(`/api/templates/${templateId}/placeholders`);
 };
 
+/**
+ * Get template content as HTML for editing
+ * @param {string} templateId - Template ID
+ * @returns {Promise<{html: string, template: object}>}
+ */
+export const getTemplateHtml = async (templateId) => {
+    return get(`/api/templates/${templateId}/html`);
+};
+
+/**
+ * Save edited template content back as DOCX
+ * @param {string} templateId - Template ID
+ * @param {string} html - Edited HTML content
+ * @returns {Promise<object>}
+ */
+export const saveTemplateContent = async (templateId, html) => {
+    return put(`/api/templates/${templateId}/content`, { html });
+};
+
 export default {
     getTemplates,
     getTemplateById,
@@ -78,4 +97,7 @@ export default {
     toggleTemplateStatus,
     deleteTemplate,
     getTemplatePlaceholders,
+    getTemplateHtml,
+    saveTemplateContent,
 };
+

@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useUI } from '@/context/UIContext';
 import {
     Card,
@@ -7,8 +7,11 @@ import {
     TemplatePreview
 } from '@/components';
 import Link from 'next/link';
-import { getTemplates, updateTemplateName, toggleTemplateStatus, deleteTemplate } from '@/services/TemplateLib';
+import { getTemplates, updateTemplateName, toggleTemplateStatus, deleteTemplate, getTemplateHtml, saveTemplateContent } from '@/services/TemplateLib';
 import { getApiUrl } from '@/services/apiService';
+
+// Lazy load the editor to avoid SSR issues with tiptap
+const TemplateEditor = lazy(() => import('@/components/TemplateEditor'));
 
 export default function ExistingTemplatesPage() {
     const { showAlert, showConfirm, showTemplatePreview, showTemplateRename } = useUI();
@@ -22,7 +25,11 @@ export default function ExistingTemplatesPage() {
     const [sortOrder, setSortOrder] = useState('desc');
     const limit = 10;
 
-
+    // ─── Template Editor State ───
+    const [editingTemplate, setEditingTemplate] = useState(null);
+    const [editorHtml, setEditorHtml] = useState('');
+    const [editorLoading, setEditorLoading] = useState(false);
+    const [editorSaving, setEditorSaving] = useState(false);
 
     const fetchTemplates = async () => {
         setLoading(true);
@@ -35,7 +42,6 @@ export default function ExistingTemplatesPage() {
                 sortOrder
             });
 
-
             if (data && Array.isArray(data.templates)) {
                 setTemplates(data.templates);
                 setTotalPages(data.pages);
@@ -46,7 +52,6 @@ export default function ExistingTemplatesPage() {
             }
         } catch (err) {
             console.error('Error fetching templates:', err);
-            // 401 redirect is handled by interceptor
             setTemplates([]);
         } finally {
             setLoading(false);
@@ -63,7 +68,6 @@ export default function ExistingTemplatesPage() {
         }, 300);
         return () => clearTimeout(timeoutId);
     }, [search, page, sortBy, sortOrder]);
-
 
     const handleEditName = async (template) => {
         showTemplateRename(template, async (newName) => {
@@ -107,6 +111,82 @@ export default function ExistingTemplatesPage() {
             }
         );
     };
+
+    // ─── Template Editor Handlers ───
+    const handleEditTemplate = useCallback(async (template) => {
+        setEditorLoading(true);
+        setEditingTemplate(template);
+        try {
+            const data = await getTemplateHtml(template._id);
+            setEditorHtml(data.html || '<p>No content found</p>');
+        } catch (err) {
+            console.error('Error loading template for editing:', err);
+            const errorMsg = err.response?.data?.error || 'Failed to load template content';
+            showAlert('Error', errorMsg, 'error');
+            setEditingTemplate(null);
+        } finally {
+            setEditorLoading(false);
+        }
+    }, [showAlert]);
+
+    const handleSaveTemplate = useCallback(async (html) => {
+        if (!editingTemplate) return;
+        setEditorSaving(true);
+        try {
+            const result = await saveTemplateContent(editingTemplate._id, html);
+            showAlert('Success', 'Template saved as .docx successfully! Placeholders and thumbnail have been updated.', 'info');
+            setEditingTemplate(null);
+            setEditorHtml('');
+            fetchTemplates(); // Refresh the list
+        } catch (err) {
+            console.error('Error saving template:', err);
+            const errorMsg = err.response?.data?.error || 'Failed to save template';
+            showAlert('Error', errorMsg, 'error');
+        } finally {
+            setEditorSaving(false);
+        }
+    }, [editingTemplate, showAlert]);
+
+    const handleCloseEditor = useCallback(() => {
+        if (editorSaving) return; // Don't close while saving
+        showConfirm(
+            'Discard Changes?',
+            'Any unsaved changes will be lost. Are you sure you want to close the editor?',
+            () => {
+                setEditingTemplate(null);
+                setEditorHtml('');
+            }
+        );
+    }, [editorSaving, showConfirm]);
+
+    // ─── If Editor is Open, show full-screen editor ───
+    if (editingTemplate) {
+        return (
+            <div className="animate-fade-in max-w-full mx-auto">
+                {editorLoading ? (
+                    <div className="flex flex-col items-center justify-center py-40">
+                        <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
+                        <p className="text-gray-400 animate-pulse">Loading template editor...</p>
+                    </div>
+                ) : (
+                    <Suspense fallback={
+                        <div className="flex flex-col items-center justify-center py-40">
+                            <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
+                            <p className="text-gray-400 animate-pulse">Loading editor component...</p>
+                        </div>
+                    }>
+                        <TemplateEditor
+                            template={editingTemplate}
+                            htmlContent={editorHtml}
+                            onSave={handleSaveTemplate}
+                            onClose={handleCloseEditor}
+                            saving={editorSaving}
+                        />
+                    </Suspense>
+                )}
+            </div>
+        );
+    }
 
     return (
         <div className="animate-fade-in max-w-7xl mx-auto pb-10">
@@ -298,6 +378,19 @@ export default function ExistingTemplatesPage() {
                                                             title="Rename"
                                                         >
                                                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+                                                        </button>
+                                                        {/* ═══ Edit Template Content Button ═══ */}
+                                                        <button
+                                                            onClick={() => handleEditTemplate(t)}
+                                                            className="w-8 h-8 rounded-lg bg-gray-50 border border-border flex items-center justify-center text-gray-500 hover:bg-blue-500/20 hover:text-blue-500 transition-all"
+                                                            title="Edit Template Content"
+                                                        >
+                                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                                                <polyline points="14 2 14 8 20 8"></polyline>
+                                                                <line x1="12" y1="18" x2="12" y2="12"></line>
+                                                                <line x1="9" y1="15" x2="15" y2="15"></line>
+                                                            </svg>
                                                         </button>
                                                         <button
                                                             onClick={() => handleDeleteTemplate(t._id)}
