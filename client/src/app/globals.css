@@ -1,0 +1,71 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap');
+@import "tailwindcss";
+@import "../components/ThemeSettings.css";
+
+@theme {
+  /* Colors mapping - Only modify ThemeSettings.css */
+  --color-background: var(--color-bg);
+  --color-foreground: var(--color-text);
+  --color-muted: var(--color-text-muted);
+  --color-description: var(--color-text-light);
+  --color-primary: var(--color-primary);
+  --color-accent: var(--color-accent);
+  --color-card: var(--color-card);
+  --color-border: var(--color-border);
+
+  /* Fonts mapping - Only modify ThemeSettings.css */
+  --font-sans: var(--font-primary);
+  --font-header: var(--font-header);
+  --font-subtitle: var(--font-subtitle);
+  --font-body: var(--font-body);
+
+  /* Utilities */
+  --shadow-card: var(--shadow-card);
+  --background-image-primary-gradient: var(--grad-primary);
+}
+
+@layer base {
+  body {
+    @apply bg-background text-foreground font-sans transition-colors duration-200;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+.gradient-text {
+  background: var(--background-image-primary-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Custom Scrollbar for Dashboard */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}

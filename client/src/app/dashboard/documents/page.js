@@ -1,0 +1,371 @@
+"use client";
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { useUI } from '@/context/UIContext';
+import {
+    Card,
+    Input,
+    Button,
+    TemplateSelector,
+    Modal
+} from '@/components';
+import { getDocuments, sendCertificateEmail } from '@/services/documentService';
+import { getTemplates } from '@/services/TemplateLib';
+import { getApiUrl } from '@/services/apiService';
+
+import { Suspense } from 'react';
+
+import { useDocuments, useTemplates, useEmail } from '@/hooks';
+
+function DocumentsContent() {
+    const searchParams = useSearchParams();
+    const templateIdParam = searchParams.get('templateId');
+
+    const { templates } = useTemplates();
+    const { sending: sendingEmail, sendEmail } = useEmail();
+
+    const {
+        documents,
+        loading,
+        totalPages,
+        totalDocs,
+        page,
+        setPage,
+        limit,
+        filters,
+        updateFilter,
+        resetFilters
+    } = useDocuments({
+        templateId: templateIdParam || ''
+    });
+
+    const [selectedDocForEmail, setSelectedDocForEmail] = useState(null);
+    const [recipientEmail, setRecipientEmail] = useState('');
+
+    const handleSendEmail = async (e) => {
+        e.preventDefault();
+        const success = await sendEmail(selectedDocForEmail._id, recipientEmail, {
+            successMessage: 'Certificate has been emailed successfully!',
+            errorMessage: 'Failed to send email'
+        });
+
+        if (success) {
+            setSelectedDocForEmail(null);
+            setRecipientEmail('');
+        }
+    };
+
+    return (
+        <div className="animate-fade-in max-w-7xl mx-auto pb-10">
+
+
+            {/* Filter Section */}
+            <Card className="mb-4 overflow-visible p-3!">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <Input
+                        label="Search ID or Name"
+                        placeholder="Search..."
+                        value={filters.search}
+                        onChange={(e) => updateFilter({ search: e.target.value })}
+                        className="!uppercase-none"
+                        compact={true}
+                    />
+                    <TemplateSelector
+                        label="Template"
+                        templates={templates}
+                        selectedTemplate={filters.templateId}
+                        onTemplateSelect={(e) => updateFilter({ templateId: e.target.value })}
+                        className="mb-0"
+                        compact={true}
+                    />
+                    <Input
+                        label="From Date"
+                        type="date"
+                        value={filters.startDate}
+                        onChange={(e) => updateFilter({ startDate: e.target.value })}
+                        compact={true}
+                    />
+                    <Input
+                        label="To Date"
+                        type="date"
+                        value={filters.endDate}
+                        onChange={(e) => updateFilter({ endDate: e.target.value })}
+                        compact={true}
+                    />
+                </div>
+
+                {(filters.search || filters.startDate || filters.endDate || filters.templateId) && (
+                    <div className="flex flex-col items-center mt-4">
+                        <button
+                            onClick={resetFilters}
+                            className="flex flex-col items-center gap-1 group transition-all text-gray-300 hover:text-primary active:scale-95"
+                        >
+                            <div className="w-7 h-7 rounded-full border border-gray-200 flex items-center justify-center group-hover:border-primary/30 transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                                    <path d="M3 3v5h5"></path>
+                                </svg>
+                            </div>
+                            <span className="text-[9px] font-medium uppercase tracking-widest">
+                                Reset
+                            </span>
+                        </button>
+                    </div>
+                )}
+            </Card>
+
+            {/* Results Table */}
+            {loading && documents.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20">
+                    <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
+                    <p className="text-gray-400 animate-pulse">Fetching your documents...</p>
+                </div>
+            ) : (
+                <div className="rounded-xl border border-border bg-card overflow-hidden shadow-card">
+                    <div className="overflow-x-auto custom-scrollbar">
+                        <table className="w-full text-left border-collapse table-fixed">
+                            <thead>
+                                <tr className="bg-gray-50 text-[10px] uppercase tracking-widest text-gray-500 font-bold border-b border-border h-[60px]">
+                                    <th className="px-6 py-0 text-center w-[80px]">S.No</th>
+                                    <th className="px-6 py-0 w-[20%]">
+                                        <button
+                                            onClick={() => {
+                                                const newOrder = (filters.sortBy === 'template' && filters.sortOrder === 'asc') ? 'desc' : 'asc';
+                                                updateFilter({ sortBy: 'template', sortOrder: newOrder });
+                                            }}
+                                            className="flex items-center justify-center gap-1 hover:text-primary transition-colors uppercase w-full"
+                                        >
+                                            Template
+                                            <span className="text-[10px]">
+                                                {filters.sortBy === 'template' ? (filters.sortOrder === 'asc' ? '▲' : '▼') : '↕'}
+                                            </span>
+                                        </button>
+                                    </th>
+                                    <th className="px-6 py-0 text-center w-[30%]">Details</th>
+                                    <th className="px-6 py-0 w-[15%]">
+                                        <button
+                                            onClick={() => {
+                                                const newOrder = (filters.sortBy === 'createdAt' && filters.sortOrder === 'asc') ? 'desc' : 'asc';
+                                                updateFilter({ sortBy: 'createdAt', sortOrder: newOrder });
+                                            }}
+                                            className="flex items-center justify-center gap-1 hover:text-primary transition-colors uppercase w-full"
+                                        >
+                                            Generated
+                                            <span className="text-[10px]">
+                                                {filters.sortBy === 'createdAt' ? (filters.sortOrder === 'asc' ? '▲' : '▼') : '↕'}
+                                            </span>
+                                        </button>
+                                    </th>
+                                    <th className="px-6 py-0 text-center w-[25%]">Action</th>
+                                </tr>
+
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                                {documents.length > 0 ? (
+                                    <>
+                                        {documents.map((doc, index) => (
+                                            <tr key={doc._id} className="hover:bg-gray-50/50 transition-all group h-[64px]">
+                                                <td className="px-6 py-0 text-xs text-gray-600 font-mono text-center">
+                                                    <div className="h-[64px] flex items-center justify-center">
+                                                        {((page - 1) * limit) + index + 1}
+                                                    </div>
+                                                </td>
+
+                                                <td className="px-6 py-0 text-center">
+                                                    <div className="h-[64px] flex items-center justify-center">
+                                                        <div className="text-sm font-normal text-foreground tracking-tight group-hover:text-primary transition-colors line-clamp-1">
+                                                            {doc.template?.name?.replace(/\.[^/.]+$/, "") || 'Unknown'}
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-0">
+                                                    <div className="h-[64px] flex flex-wrap gap-1 justify-center content-center max-w-[220px] mx-auto overflow-hidden">
+                                                        {Object.entries(doc.data || {})
+                                                            .filter(([key, val]) =>
+                                                                !['QR', 'QRCODE', 'CERTIFICATE_ID', 'CERTIFICATE ID', 'CERTIFICATEID', 'ID', 'UNIQUE_ID', 'DOC_ID', 'certificate_id', 'IMAGE_QR', 'IMAGE QR'].includes(key.toUpperCase())
+                                                                && !key.includes(' ')
+                                                                && typeof val !== 'object'
+                                                            )
+                                                            .slice(0, 3)
+                                                            .map(([key, val]) => (
+                                                                <span key={key} className="bg-gray-50 text-[9px] px-2 py-0.5 rounded text-muted font-mono border border-border italic whitespace-nowrap">
+                                                                    {key}: {val}
+                                                                </span>
+                                                            ))}
+                                                        {Object.entries(doc.data || {}).filter(([key, val]) => !['QR', 'QRCODE', 'CERTIFICATE_ID', 'CERTIFICATE ID', 'CERTIFICATEID', 'ID', 'UNIQUE_ID', 'DOC_ID', 'certificate_id', 'IMAGE_QR', 'IMAGE QR'].includes(key.toUpperCase()) && !key.includes(' ') && typeof val !== 'object').length > 3 && (
+                                                            <span className="text-[9px] text-gray-500 font-medium self-center">
+                                                                +{Object.entries(doc.data || {}).filter(([key, val]) => !['QR', 'QRCODE', 'CERTIFICATE_ID', 'CERTIFICATE ID', 'CERTIFICATEID', 'ID', 'UNIQUE_ID', 'DOC_ID', 'certificate_id', 'IMAGE_QR', 'IMAGE QR'].includes(key.toUpperCase()) && !key.includes(' ') && typeof val !== 'object').length - 3}
+                                                            </span>
+                                                        )}
+                                                        {Object.entries(doc.data || {}).filter(([key, val]) => !['QR', 'QRCODE', 'CERTIFICATE_ID', 'CERTIFICATE ID', 'CERTIFICATEID', 'ID', 'UNIQUE_ID', 'DOC_ID', 'certificate_id', 'IMAGE_QR', 'IMAGE QR'].includes(key.toUpperCase()) && !key.includes(' ') && typeof val !== 'object').length === 0 && (
+                                                            <span className="text-[9px] text-gray-400 italic">No extra data</span>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-0 text-center">
+                                                    <div className="h-[64px] flex flex-col justify-center">
+                                                        <div className="text-xs text-gray-400">
+                                                            {new Date(doc.createdAt).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}
+                                                        </div>
+                                                        <div className="text-[10px] text-gray-600">
+                                                            {new Date(doc.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-0 text-center">
+                                                    <div className="h-[64px] flex items-center justify-center gap-2">
+                                                        <button
+                                                            onClick={() => setSelectedDocForEmail(doc)}
+                                                            className="inline-flex items-center justify-center w-9 h-9 text-primary hover:bg-primary/10 transition-all rounded-lg border border-primary/20"
+                                                            title="Send via Email"
+                                                        >
+                                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                                                                <polyline points="22,6 12,13 2,6"></polyline>
+                                                            </svg>
+                                                        </button>
+                                                        <a
+                                                            href={getApiUrl(`/${doc.filePath}`)}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="inline-flex items-center gap-2 group/pdf"
+                                                        >
+                                                            <div className="flex items-center gap-2 px-4 py-2 bg-gray-50 border border-border rounded-xl group-hover/pdf:bg-primary/10 group-hover/pdf:border-primary/30 transition-all shadow-sm">
+                                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-primary transition-transform group-hover/pdf:scale-110">
+                                                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                                                </svg>
+                                                                <span className="text-[11px] font-medium text-gray-900 tracking-tight">PDF</span>
+                                                            </div>
+                                                        </a>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                        {documents.length < limit && documents.length > 0 &&
+                                            [...Array(limit - documents.length)].map((_, i) => (
+                                                <tr key={`empty-${i}`} className="h-[64px]">
+                                                    <td colSpan="5"><div className="h-[64px]"></div></td>
+                                                </tr>
+                                            ))
+                                        }
+                                    </>
+                                ) : (
+                                    <tr>
+                                        <td colSpan="5" className="px-6 py-20 text-center">
+                                            <div className="flex flex-col items-center">
+                                                <span className="text-4xl mb-4 grayscale opacity-50">📂</span>
+                                                <p className="text-gray-500 font-medium">No documents found matching your filters.</p>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {/* Pagination Controls */}
+                    {totalPages > 1 && (
+                        <div className="bg-gray-50 px-6 py-4 flex items-center justify-between border-t border-border">
+                            <div className="text-xs text-muted">
+                                Showing <span className="text-foreground font-medium">{((page - 1) * limit) + 1}</span> to <span className="text-foreground font-medium">{Math.min(page * limit, totalDocs)}</span> of <span className="text-foreground font-medium">{totalDocs}</span> documents
+                            </div>
+                            <div className="flex gap-2">
+                                <Button
+                                    variant="ghost"
+                                    className="text-[10px] uppercase font-medium py-2 px-4 border border-border disabled:opacity-30"
+                                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                                    disabled={page === 1}
+                                >
+                                    Previous
+                                </Button>
+                                {(() => {
+                                    if (totalPages <= 6) {
+                                        return [...Array(totalPages)].map((_, i) => i + 1);
+                                    }
+                                    return [1, 2, 3, 4, 5, '...', totalPages];
+                                })().map((p, i) => (
+                                    p === '...' ? (
+                                        <span key={`dots-${i}`} className="w-8 h-8 flex items-center justify-center text-gray-400 text-xs font-bold">...</span>
+                                    ) : (
+                                        <button
+                                            key={p}
+                                            onClick={() => setPage(p)}
+                                            className={`w-8 h-8 rounded-lg text-[10px] font-medium transition-all ${page === p
+                                                ? 'bg-primary text-white shadow-lg shadow-primary/20'
+                                                : 'bg-gray-50 text-muted hover:bg-gray-100 border border-border'
+                                                }`}
+                                        >
+                                            {p}
+                                        </button>
+                                    )
+                                ))}
+                                <Button
+                                    variant="ghost"
+                                    className="text-[10px] uppercase font-medium py-2 px-4 border border-border disabled:opacity-30"
+                                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                                    disabled={page === totalPages}
+                                >
+                                    Next
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+            {/* Email Modal */}
+            <Modal
+                isOpen={!!selectedDocForEmail}
+                onClose={() => setSelectedDocForEmail(null)}
+                title="Send Certificate"
+                subtitle={`Sending: ${selectedDocForEmail?.template?.name?.replace(/\.[^/.]+$/, "") || 'Document'}`}
+            >
+                <form onSubmit={handleSendEmail} className="space-y-6">
+                    <Input
+                        label="Recipient Email"
+                        type="email"
+                        placeholder="recipient@example.com"
+                        required
+                        value={recipientEmail}
+                        onChange={(e) => setRecipientEmail(e.target.value)}
+                        className="bg-gray-50/50 border-gray-200 focus:bg-white"
+                    />
+                    <div className="flex items-center gap-4 pt-4 border-t border-border mt-8">
+                        <button
+                            type="button"
+                            className="flex-1 px-4 py-3 text-sm font-bold text-muted hover:text-foreground transition-colors uppercase tracking-widest"
+                            onClick={() => setSelectedDocForEmail(null)}
+                            disabled={sendingEmail}
+                        >
+                            Cancel
+                        </button>
+                        <Button
+                            type="submit"
+                            className="flex-1 py-3 h-auto"
+                            disabled={sendingEmail || !recipientEmail}
+                        >
+                            {sendingEmail ? (
+                                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                            ) : (
+                                "Send Email"
+                            )}
+                        </Button>
+                    </div>
+                </form>
+            </Modal>
+        </div>
+    );
+}
+
+export default function DocumentsPage() {
+    return (
+        <Suspense fallback={
+            <div className="flex items-center justify-center py-20">
+                <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+            </div>
+        }>
+            <DocumentsContent />
+        </Suspense>
+    );
+}
+

@@ -1,0 +1,948 @@
+const express = require('express');
+const mongoose = require('mongoose');
+
+const router = express.Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const createReport = require('docx-templates').default;
+const puppeteer = require('puppeteer');
+const QRCode = require('qrcode');
+const crypto = require('crypto');
+const mammoth = require('mammoth');
+const { exec } = require('child_process');
+const csv = require('csv-parser');
+const archiver = require('archiver');
+const nodemailer = require('nodemailer');
+
+const Template = require('../models/Template');
+const Document = require('../models/Document');
+const Organization = require('../models/Organization');
+const auth = require('../middleware/auth');
+const PizZip = require('pizzip');
+
+// Multer Setup
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, 'uploads/');
+    },
+    filename: (req, file, cb) => {
+        cb(null, Date.now() + '-' + file.originalname);
+    }
+});
+const upload = multer({ storage: storage });
+
+// Helper: Extract Placeholders
+async function extractPlaceholders(filePath) {
+    const buffer = fs.readFileSync(filePath);
+    const zip = new PizZip(buffer);
+    const xmlFiles = zip.file(/\.xml$/);
+
+    const matches = new Set();
+    const regex = /\{\{(.*?)\}\}/g;
+
+    xmlFiles.forEach(file => {
+        try {
+            const content = file.asText();
+            // Remove XML tags to bridge fragmentation and catch content in text boxes/headers/footers
+            // mammoth often ignores these, but A4/Letter templates use them heavily.
+            const cleanText = content.replace(/<[^>]+>/g, '');
+
+            let match;
+            while ((match = regex.exec(cleanText)) !== null) {
+                const placeholder = match[1].trim().toUpperCase();
+                const systemTags = ['CERTIFICATE_ID', 'QR_CODE', 'QR', 'IMAGE QR', 'IMAGE_QR', 'QRCODE'];
+                if (!systemTags.includes(placeholder) && placeholder.length > 0 && !placeholder.includes('IMAGE ')) {
+                    matches.add(placeholder);
+                }
+            }
+        } catch (e) {
+            console.error(`Error reading XML file ${file.name}:`, e);
+        }
+    });
+
+    // Fallback/Supplement with mammoth for general text
+    try {
+        const result = await mammoth.extractRawText({ buffer });
+        let match;
+        while ((match = regex.exec(result.value)) !== null) {
+            const placeholder = match[1].trim().toUpperCase();
+            const systemTags = ['CERTIFICATE_ID', 'QR_CODE', 'QR', 'IMAGE QR', 'IMAGE_QR', 'QRCODE'];
+            if (!systemTags.includes(placeholder) && placeholder.length > 0 && !placeholder.includes('IMAGE ')) {
+                matches.add(placeholder);
+            }
+        }
+    } catch (e) { }
+
+    return Array.from(matches);
+}
+
+// Helper: Generate Template Preview Thumbnail
+async function generateThumbnail(docxPath, outputId) {
+    const tempPdfName = path.basename(docxPath, '.docx') + '.pdf';
+    const tempPdfPath = path.join(path.dirname(docxPath), tempPdfName);
+    const pngPath = path.join(path.dirname(docxPath), `${outputId}.png`);
+
+    // 1. Docx to PDF using LibreOffice
+    const possiblePaths = [
+        'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
+        'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe'
+    ];
+    let sofficePath = possiblePaths.find(p => fs.existsSync(p)) || 'soffice';
+    const outputDir = path.dirname(docxPath);
+    const cmd = `"${sofficePath}" --headless --convert-to pdf --outdir "${outputDir}" "${docxPath}"`;
+
+    await new Promise((resolve, reject) => {
+        exec(cmd, (error, stdout, stderr) => {
+            if (error) resolve(stdout); // LibreOffice often sends "info" to stderr
+            else resolve(stdout);
+        });
+    });
+
+    if (!fs.existsSync(tempPdfPath)) {
+        throw new Error('PDF conversion failed, cannot generate thumbnail.');
+    }
+
+    // 2. PDF to PNG using Puppeteer
+    const browser = await puppeteer.launch({
+        headless: "new",
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--hide-scrollbars',
+            '--force-device-scale-factor=2' // Higher quality
+        ]
+    });
+
+    try {
+        const page = await browser.newPage();
+
+        // Certificates are usually Landscape A4 (297x210mm)
+        // We set a high-res landscape viewport
+        await page.setViewport({ width: 1280, height: 905 });
+
+        const absolutePdfPath = path.resolve(tempPdfPath);
+        // toolbar=0, navpanes=0, scrollbar=0 and view=Fit to clean up the Chrome PDF viewer
+        const pdfUrl = `file:///${absolutePdfPath.replace(/\\/g, '/')}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`;
+
+        await page.goto(pdfUrl, { waitUntil: 'networkidle0' });
+
+        // Stabilization delay for the PDF viewer to center and scale the content
+        await new Promise(r => setTimeout(r, 1500));
+
+        await page.screenshot({
+            path: pngPath,
+            omitBackground: true
+        });
+    } finally {
+        await browser.close();
+        // Cleanup temp PDF
+        if (fs.existsSync(tempPdfPath)) {
+            fs.unlinkSync(tempPdfPath);
+        }
+    }
+
+    return `uploads/${outputId}.png`;
+}
+
+// 1. Upload Template (Protected)
+router.post('/templates', auth, upload.single('file'), async (req, res) => {
+    let thumbnailPath = null;
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+        const templateName = (req.body.name || req.file.originalname).replace(/\.docx$/i, '');
+        const existingTemplate = await Template.findOne({ name: templateName });
+
+        if (existingTemplate) {
+            if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+            return res.status(400).json({ error: `A template with the name "${templateName}" already exists.` });
+        }
+
+        const placeholders = await extractPlaceholders(req.file.path);
+
+        if (placeholders.length === 0) {
+            if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+            return res.status(400).json({ error: 'Invalid Template: Must contain at least one dynamic placeholder (e.g. {{name}}).' });
+        }
+
+        // Generate Thumbnail
+        const outputId = Date.now() + '-preview';
+        thumbnailPath = await generateThumbnail(req.file.path, outputId);
+
+        const template = new Template({
+            name: templateName,
+            filePath: req.file.path,
+            thumbnailPath: thumbnailPath,
+            placeholders: placeholders
+        });
+
+        await template.save();
+        res.json(template);
+    } catch (err) {
+        console.error('Template Upload Error:', err);
+        // Cleanup if something failed
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        if (thumbnailPath) {
+            const absoluteThumbnailPath = path.join(__dirname, '..', thumbnailPath);
+            if (fs.existsSync(absoluteThumbnailPath)) fs.unlinkSync(absoluteThumbnailPath);
+        }
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 2.3 Toggle Template Status (Protected)
+router.patch('/templates/:id/toggle', auth, async (req, res) => {
+    try {
+        const template = await Template.findById(req.params.id);
+        if (!template) return res.status(404).json({ error: 'Template not found' });
+
+        template.enabled = !template.enabled;
+        await template.save();
+        res.json({ success: true, enabled: template.enabled });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+router.get('/templates', auth, async (req, res) => {
+    try {
+        const { search, onlyEnabled } = req.query;
+        let query = {};
+        if (search) {
+            query.name = { $regex: search, $options: 'i' };
+        }
+        if (onlyEnabled === 'true') {
+            query.enabled = true;
+        }
+
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        const sortBy = req.query.sortBy || 'createdAt';
+        const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+        const total = await Template.countDocuments(query);
+        const templatesWithCount = await Template.aggregate([
+            { $match: query },
+            {
+                $lookup: {
+                    from: 'documents',
+                    localField: '_id',
+                    foreignField: 'template',
+                    as: 'documents'
+                }
+            },
+            {
+                $project: {
+                    name: 1,
+                    filePath: 1,
+                    thumbnailPath: 1,
+                    placeholders: 1,
+                    enabled: 1,
+                    createdAt: 1,
+                    documentCount: { $size: '$documents' }
+                }
+            },
+            { $sort: { [sortBy]: sortOrder } },
+            { $skip: skip },
+            { $limit: limit }
+        ]);
+
+        res.json({
+            templates: templatesWithCount,
+            total,
+            pages: Math.ceil(total / limit),
+            currentPage: page
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 2.5 Delete Template (Protected)
+router.delete('/templates/:id', auth, async (req, res) => {
+    try {
+        const template = await Template.findById(req.params.id);
+        if (!template) return res.status(404).json({ error: 'Template not found' });
+
+        // Delete the file
+        if (fs.existsSync(template.filePath)) {
+            fs.unlinkSync(template.filePath);
+        }
+
+        // Delete the thumbnail
+        if (template.thumbnailPath) {
+            const absThumbnailPath = path.join(__dirname, '..', template.thumbnailPath);
+            if (fs.existsSync(absThumbnailPath)) {
+                fs.unlinkSync(absThumbnailPath);
+            }
+        }
+
+        // Delete from database
+        await Template.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: 'Template deleted' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 2.6 Get Stats (Protected)
+router.get('/stats', auth, async (req, res) => {
+    try {
+        const totalTemplates = await Template.countDocuments();
+        const totalDocuments = await Document.countDocuments();
+
+        res.json({
+            totalTemplates,
+            documentsIssued: totalDocuments,
+            pendingVerifications: 0 // Placeholder for future feature
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/generate', auth, async (req, res) => {
+    try {
+        const { templateId, data } = req.body;
+        const template = await Template.findById(templateId);
+        if (!template) return res.status(404).json({ error: 'Template not found' });
+
+        const uniqueId = crypto.randomUUID();
+
+        // Generate QR Code Buffer
+        const verificationUrl = `${process.env.BASE_URL || 'http://localhost:3000'}/verify/${uniqueId}`;
+        const qrCodeBuffer = await QRCode.toBuffer(verificationUrl);
+
+        // Prepare Data with maximum redundancy
+        console.error(`Attempting to generate certificate: ${uniqueId}`);
+        // Prepare Data with maximum redundancy
+        console.log(`--- Starting Generation for: ${uniqueId} ---`);
+        // Prepare the QR Image Object directly (Avoids width: undefined errors)
+        const qrImage = {
+            width: 4,
+            height: 4,
+            data: qrCodeBuffer,
+            extension: '.png'
+        };
+
+        // Normalize all user data to uppercase
+        const normalizedData = {};
+        Object.keys(data).forEach(key => {
+            if (typeof data[key] === 'string') {
+                normalizedData[key] = data[key].toUpperCase();
+            } else {
+                normalizedData[key] = data[key];
+            }
+        });
+
+        const finalData = {
+            ...normalizedData,
+            CERTIFICATE_ID: uniqueId, // Main ID (keeps its casing)
+            certificate_id: uniqueId,
+            "Certificate ID": uniqueId,
+            CERTIFICATEID: uniqueId,
+            ID: uniqueId,
+            QR: qrImage,
+            QRCODE: qrImage
+        };
+
+        // Read template once
+        let templateBuffer = fs.readFileSync(template.filePath);
+
+        // --- SAFE CASING MAPPER: Map source template tags to uppercase data ---
+        try {
+            const zip = new PizZip(templateBuffer);
+            const xmlFiles = zip.file(/\.xml$/);
+            const tagRegex = /\{\{(.*?)\}\}/g;
+
+            xmlFiles.forEach(file => {
+                const content = file.asText();
+                const cleanText = content.replace(/<[^>]+>/g, '');
+                let m;
+                while ((m = tagRegex.exec(cleanText)) !== null) {
+                    const rawTag = m[1].trim();
+                    const capsTag = rawTag.toUpperCase();
+
+                    // If it's an image command like {{IMAGE qr}}, map the data from finalData['QR']
+                    if (capsTag.startsWith('IMAGE ') && rawTag !== capsTag) {
+                        const dataKey = capsTag.replace('IMAGE ', '');
+                        if (finalData[dataKey]) {
+                            finalData[rawTag] = finalData[dataKey];
+                        }
+                    }
+
+                    // If template has e.g. {{certificate_id}} and we have it in finalData as CERTIFICATE_ID, clone it
+                    const idTags = ['CERTIFICATE_ID', 'CERTIFICATE ID', 'CERTIFICATEID', 'ID', 'UNIQUE_ID', 'DOC_ID'];
+                    if (idTags.includes(capsTag)) {
+                        finalData[rawTag] = uniqueId;
+                    } else if (finalData[capsTag] !== undefined && finalData[rawTag] === undefined) {
+                        finalData[rawTag] = finalData[capsTag];
+                    }
+                }
+            });
+
+            // --- NUCLEAR PRE-PROCESSOR: Bridge any and all XML fragmentation ---
+            // Re-use zip and xmlFiles from above
+            const nuclearQrRegex = /\{(<[^>]+>)*\{(<[^>]+>)*\s*[qQ](<[^>]+>)*[rR](<[^>]+>)*\s*\}(<[^>]+>)*\}/g;
+            const nuclearQrCodeRegex = /\{(<[^>]+>)*\{(<[^>]+>)*\s*[qQ](<[^>]+>)*[rR](<[^>]+>)*[cC](<[^>]+>)*[oO](<[^>]+>)*[dD](<[^>]+>)*[eE](<[^>]+>)*\s*\}(<[^>]+>)*\}/g;
+
+            let transformed = false;
+            xmlFiles.forEach(file => {
+                let content = file.asText();
+                let docTransformed = false;
+
+                if (nuclearQrRegex.test(content) || nuclearQrCodeRegex.test(content)) {
+                    console.log(`📦 Nuclear scan found fragmented QR tag in ${file.name}, fixing...`);
+                    content = content.replace(nuclearQrRegex, '{{IMAGE QR}}');
+                    content = content.replace(nuclearQrCodeRegex, '{{IMAGE QR}}');
+                    docTransformed = true;
+                }
+
+                if (docTransformed) {
+                    zip.file(file.name, content);
+                    transformed = true;
+                }
+            });
+
+            if (transformed) {
+                templateBuffer = zip.generate({ type: 'nodebuffer' });
+            }
+        } catch (e) {
+            console.error('Template pre-processing failed:', e);
+        }
+
+        // 2. Fill the DOCX Template with Image Support
+        let outputBuffer;
+        try {
+            outputBuffer = await createReport({
+                template: templateBuffer,
+                data: finalData,
+                cmdDelimiter: ['{{', '}}'],
+                additionalJsContext: {
+                    IMAGE: (data) => data
+                }
+            });
+        } catch (error) {
+
+            console.error('❌ Template filling error:', error.message);
+            return res.status(400).json({
+                error: 'Template formatting issue',
+                details: error.message
+            });
+        }
+
+        // Convert Filled DOCX to PDF using LibreOffice
+        const pdfFilename = `uploads/${uniqueId}.pdf`;
+        const absolutePdfPath = path.join(__dirname, `../${pdfFilename}`);
+        const tempDocxPath = path.join(__dirname, `../uploads/${uniqueId}.docx`);
+
+        // Save the generated DOCX first to convert it
+        fs.writeFileSync(tempDocxPath, outputBuffer);
+
+        try {
+            const possiblePaths = [
+                'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
+                'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe'
+            ];
+            let sofficePath = possiblePaths.find(p => fs.existsSync(p)) || 'soffice';
+
+            const outputDir = path.dirname(absolutePdfPath);
+            const cmd = `"${sofficePath}" --headless --convert-to pdf --outdir "${outputDir}" "${tempDocxPath}"`;
+
+            await new Promise((resolve, reject) => {
+                exec(cmd, (error, stdout, stderr) => {
+                    if (error) reject(new Error(stderr || error.message));
+                    else resolve(stdout);
+                });
+            });
+
+            if (!fs.existsSync(absolutePdfPath)) {
+                throw new Error('PDF file was not created by LibreOffice.');
+            }
+
+            // Cleanup temp docx
+            fs.unlinkSync(tempDocxPath);
+
+        } catch (pdfErr) {
+            console.error('❌ PDF Processing Error:', pdfErr);
+            return res.status(500).json({
+                error: 'PDF conversion failed.',
+                details: pdfErr.message
+            });
+        }
+
+        // 5. Save Document Record
+        const newDoc = new Document({
+            uniqueId,
+            data: finalData,
+            filePath: pdfFilename,
+            template: template._id,
+            organization: req.user.organization // Keep track of which org created it
+        });
+        await newDoc.save();
+
+        res.json({ success: true, document: newDoc, downloadUrl: `/${pdfFilename}` });
+
+
+    } catch (err) {
+        console.error('❌ Generation error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 4. Verify Document
+router.get('/verify/:id', async (req, res) => {
+    try {
+        // Case-insensitive search for the uniqueId
+        const doc = await Document.findOne({
+            uniqueId: { $regex: `^${req.params.id}$`, $options: 'i' }
+        }).populate('template');
+
+        if (!doc) return res.status(404).json({ valid: false, message: 'Document not found' });
+
+        res.json({
+            valid: true,
+            data: doc.data,
+            templateName: doc.template.name,
+            issuedAt: doc.createdAt
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 5. Bulk Generate from CSV (Protected)
+router.post('/generate-bulk', auth, upload.single('csvFile'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No CSV file uploaded' });
+
+        const { templateId } = req.body;
+        const template = await Template.findById(templateId);
+        if (!template) return res.status(404).json({ error: 'Template not found' });
+
+        console.log(`🚀 Starting Bulk Generation: Template "${template.name}", Request ID: ${crypto.randomUUID()}`);
+
+        // Parse CSV
+        const csvData = [];
+        const csvPath = req.file.path;
+
+        await new Promise((resolve, reject) => {
+            fs.createReadStream(csvPath)
+                .pipe(csv())
+                .on('data', (row) => csvData.push(row))
+                .on('end', resolve)
+                .on('error', reject);
+        });
+
+        if (csvData.length === 0) {
+            fs.unlinkSync(csvPath);
+            return res.status(400).json({ error: 'CSV file is empty' });
+        }
+
+        console.log(`📊 CSV Parsed: ${csvData.length} rows found.`);
+
+        // --- PRE-PROCESS TEMPLATE ONCE ---
+        let baseTemplateBuffer = fs.readFileSync(template.filePath);
+        const tagMapping = []; // Stores { rawTag, capsTag }
+
+        try {
+            // Extract tags once using robust XML scanning (catches text boxes, headers, footers)
+            const zip = new PizZip(baseTemplateBuffer);
+            const xmlFiles = zip.file(/\.xml$/);
+            const tagRegex = /\{\{(.*?)\}\}/g;
+
+            xmlFiles.forEach(file => {
+                const content = file.asText();
+                const cleanText = content.replace(/<[^>]+>/g, '');
+                let m;
+                while ((m = tagRegex.exec(cleanText)) !== null) {
+                    const rawTag = m[1].trim();
+                    const capsTag = rawTag.toUpperCase();
+                    // System tags are handled separately
+                    const systemTags = ['CERTIFICATE_ID', 'QR_CODE', 'QR', 'IMAGE QR', 'IMAGE_QR', 'QRCODE'];
+                    if (!systemTags.includes(capsTag) && !capsTag.includes('IMAGE ')) {
+                        // Check if already mapped to avoid duplicates
+                        if (!tagMapping.some(t => t.capsTag === capsTag)) {
+                            tagMapping.push({ rawTag, capsTag });
+                        }
+                    }
+                }
+            });
+
+            console.log(`🔍 Pre-analysis found ${tagMapping.length} unique CSV-mappable tags.`);
+
+            // Global Nuclear Check once
+            const nuclearQrRegex = /\{(<[^>]+>)*\{(<[^>]+>)*\s*[qQ](<[^>]+>)*[rR](<[^>]+>)*\s*\}(<[^>]+>)*\}/g;
+            const nuclearQrCodeRegex = /\{(<[^>]+>)*\{(<[^>]+>)*\s*[qQ](<[^>]+>)*[rR](<[^>]+>)*[cC](<[^>]+>)*[oO](<[^>]+>)*[dD](<[^>]+>)*[eE](<[^>]+>)*\s*\}(<[^>]+>)*\}/g;
+
+            let transformed = false;
+            xmlFiles.forEach(file => {
+                let content = file.asText();
+                if (nuclearQrRegex.test(content) || nuclearQrCodeRegex.test(content)) {
+                    content = content.replace(nuclearQrRegex, '{{IMAGE QR}}');
+                    content = content.replace(nuclearQrCodeRegex, '{{IMAGE QR}}');
+                    zip.file(file.name, content);
+                    transformed = true;
+                }
+            });
+
+            if (transformed) {
+                baseTemplateBuffer = zip.generate({ type: 'nodebuffer' });
+                console.log('📦 Global Nuclear Pre-processor fixed fragmented tags.');
+            }
+        } catch (e) {
+            console.error('⚠️ Template pre-analysis failed:', e.message);
+        }
+
+        // Create a unique folder for this batch
+        const batchId = crypto.randomUUID();
+        const batchFolder = path.join(__dirname, `../uploads/batch_${batchId}`);
+        fs.mkdirSync(batchFolder, { recursive: true });
+
+        const generatedDocs = [];
+        const errors = [];
+
+        // Soffice Path Search
+        const possiblePaths = [
+            'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
+            'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe'
+        ];
+        let sofficePath = possiblePaths.find(p => fs.existsSync(p)) || 'soffice';
+
+        // Generate PDF for each row
+        for (let i = 0; i < csvData.length; i++) {
+            const rawRowData = csvData[i];
+            const rowNumber = i + 2;
+
+            // 1. Normalize Row Keys to Uppercase for matching
+            const rowDataUpper = {};
+            Object.keys(rawRowData).forEach(key => {
+                rowDataUpper[key.trim().toUpperCase()] = rawRowData[key];
+            });
+
+            // 2. Validation: Check if all required placeholders have values (Case Insensitive)
+            const missingValues = template.placeholders.filter(p => !rowDataUpper[p] || rowDataUpper[p].trim() === "");
+
+            if (missingValues.length > 0) {
+                errors.push({
+                    row: rowNumber,
+                    error: `Missing values for required field(s): ${missingValues.join(', ')}`,
+                    data: rawRowData
+                });
+                continue;
+            }
+
+            const uniqueId = crypto.randomUUID();
+            try {
+                // Generate QR Code
+                const verificationUrl = `${process.env.BASE_URL || 'http://localhost:3000'}/verify/${uniqueId}`;
+                const qrCodeBuffer = await QRCode.toBuffer(verificationUrl);
+                const qrImage = { width: 4, height: 4, data: qrCodeBuffer, extension: '.png' };
+
+                // 3. Prepare Final Data Map
+                const finalData = {
+                    CERTIFICATE_ID: uniqueId,
+                    certificate_id: uniqueId,
+                    ID: uniqueId,
+                    QR: qrImage,
+                    IMAGE_QR: qrImage // Pre-mapped for nuclear tags
+                };
+
+                // Add csv values (normalized to uppercase values as requested by user in prev turns)
+                Object.keys(rowDataUpper).forEach(key => {
+                    finalData[key] = (typeof rowDataUpper[key] === 'string')
+                        ? rowDataUpper[key].toUpperCase()
+                        : rowDataUpper[key];
+                });
+
+                // 4. Safe Casing Mapping: Fill the doc's raw tags using our pre-calculated mapping
+                tagMapping.forEach(({ rawTag, capsTag }) => {
+                    // Specific Handling for ID tags
+                    const idTags = ['CERTIFICATE_ID', 'CERTIFICATE ID', 'CERTIFICATEID', 'ID', 'UNIQUE_ID', 'DOC_ID'];
+                    if (idTags.includes(capsTag)) {
+                        finalData[rawTag] = uniqueId;
+                    } else if (capsTag === 'IMAGE QR' || capsTag === 'QR') {
+                        finalData[rawTag] = qrImage;
+                    } else if (capsTag.startsWith('IMAGE ')) {
+                        const subKey = capsTag.replace('IMAGE ', '');
+                        if (finalData[subKey]) finalData[rawTag] = finalData[subKey];
+                    } else if (finalData[capsTag] !== undefined && finalData[rawTag] === undefined) {
+                        finalData[rawTag] = finalData[capsTag];
+                    }
+                });
+
+                // 5. Generate Report
+                const outputBuffer = await createReport({
+                    template: baseTemplateBuffer,
+                    data: finalData,
+                    cmdDelimiter: ['{{', '}}'],
+                    additionalJsContext: { IMAGE: (data) => data }
+                });
+
+                // Save temp DOCX
+                const tempDocxPath = path.join(batchFolder, `${uniqueId}.docx`);
+                fs.writeFileSync(tempDocxPath, outputBuffer);
+
+                // Convert to PDF
+                const pdfPath = path.join(batchFolder, `${uniqueId}.pdf`);
+                const cmd = `"${sofficePath}" --headless --convert-to pdf --outdir "${batchFolder}" "${tempDocxPath}"`;
+
+                await new Promise((resolve, reject) => {
+                    exec(cmd, (error, stdout, stderr) => {
+                        if (error) reject(new Error(stderr || error.message));
+                        else resolve(stdout);
+                    });
+                });
+
+                if (!fs.existsSync(pdfPath)) throw new Error('PDF conversion failed: File not created');
+
+                fs.unlinkSync(tempDocxPath);
+
+                // Save to database
+                const newDoc = new Document({
+                    uniqueId,
+                    data: finalData,
+                    filePath: `uploads/batch_${batchId}/${uniqueId}.pdf`,
+                    template: template._id,
+                    organization: req.user.organization
+                });
+                await newDoc.save();
+
+
+                generatedDocs.push({
+                    uniqueId,
+                    filename: `${rowDataUpper['NAME'] || rowDataUpper['STUDENT'] || rowDataUpper['RECIPIENT'] || uniqueId}.pdf`,
+                    path: pdfPath
+                });
+
+            } catch (err) {
+                console.error(`❌ Error generating row ${rowNumber}:`, err.message);
+                errors.push({ row: rowNumber, error: err.message, data: rawRowData });
+            }
+        }
+
+        // Cleanup CSV
+        if (fs.existsSync(csvPath)) fs.unlinkSync(csvPath);
+
+        if (generatedDocs.length === 0) {
+            fs.rmSync(batchFolder, { recursive: true, force: true });
+            return res.status(500).json({
+                error: 'Failed to generate any valid certificates.',
+                details: errors
+            });
+        }
+
+        // 6. Create ZIP
+        const zipPath = path.join(__dirname, `../uploads/batch_${batchId}.zip`);
+        const output = fs.createWriteStream(zipPath);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+
+        output.on('close', () => {
+            // DO NOT delete the batch folder anymore, as the user wants to see these in the library
+            // and be able to email/preview them later.
+            // fs.rmSync(batchFolder, { recursive: true, force: true });
+
+            console.log(`✅ Bulk Generation Complete: ${generatedDocs.length} success, ${errors.length} failed.`);
+            res.json({
+
+                success: true,
+                totalRows: csvData.length,
+                generated: generatedDocs.length,
+                failed: errors.length,
+                errors: errors,
+                downloadUrl: `/uploads/batch_${batchId}.zip`,
+                batchId: batchId
+            });
+        });
+
+        archive.on('error', (err) => { throw err; });
+        archive.pipe(output);
+        generatedDocs.forEach(doc => {
+            archive.file(doc.path, { name: doc.filename });
+        });
+        archive.finalize();
+
+    } catch (err) {
+        console.error('💥 Fatal Bulk Generation Error:', err);
+        res.status(500).json({ error: 'Internal Server Error', details: err.message });
+    }
+});
+
+// 6. Send Email with Certificate or ZIP
+router.post('/send-email', auth, async (req, res) => {
+    try {
+        const { documentId, recipientEmail } = req.body;
+        let absolutePath;
+        let filename;
+        let subject;
+
+        if (documentId.startsWith('zip:')) {
+            // Case: Bulk ZIP
+            const relativePath = documentId.replace('zip:', '');
+            absolutePath = path.join(__dirname, '..', relativePath);
+            filename = 'certificates_batch.zip';
+            subject = 'Your Bulk Certificates Batch';
+        } else {
+            // Case: Single Document
+            const doc = await Document.findById(documentId).populate('template');
+            if (!doc) return res.status(404).json({ error: 'Document not found' });
+            absolutePath = path.join(__dirname, '..', doc.filePath);
+            filename = `${doc.template.name}.pdf`;
+            subject = `Your Certificate: ${doc.template.name}`;
+        }
+
+        if (!fs.existsSync(absolutePath)) {
+            return res.status(404).json({ error: 'File not found on server' });
+        }
+
+        // Create Transporter
+        const transporter = nodemailer.createTransport({
+            host: process.env.SMTP_HOST,
+            port: process.env.SMTP_PORT,
+            secure: process.env.SMTP_PORT == 465,
+            auth: {
+                user: process.env.SMTP_USER,
+                pass: process.env.SMTP_PASS,
+            },
+        });
+
+        const mailOptions = {
+            from: process.env.SMTP_FROM,
+            to: recipientEmail,
+            subject: subject,
+            text: `Hello,\n\nPlease find the requested file(s) attached.\n\nRegards,\nVerifyCert Team`,
+            attachments: [
+                {
+                    filename: filename,
+                    path: absolutePath
+                }
+            ]
+        };
+
+        await transporter.sendMail(mailOptions);
+        res.json({ success: true, message: 'Email sent successfully!' });
+
+    } catch (err) {
+        console.error('❌ Email sending error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 2.7 Update Template Name (Protected)
+router.put('/templates/:id', auth, async (req, res) => {
+    try {
+        const { name } = req.body;
+        if (!name) return res.status(400).json({ error: 'Name is required' });
+
+        const template = await Template.findById(req.params.id);
+        if (!template) return res.status(404).json({ error: 'Template not found' });
+
+        // Check if another template already has this name
+        const existingTemplate = await Template.findOne({ name, _id: { $ne: req.params.id } });
+        if (existingTemplate) {
+            return res.status(400).json({ error: 'A template with this name already exists' });
+        }
+
+        template.name = name.replace(/\.docx$/i, '');
+        await template.save();
+        res.json(template);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 7. List All Generated Documents (Protected)
+router.get('/documents', auth, async (req, res) => {
+    try {
+        const { search, startDate, endDate, templateId } = req.query;
+        let query = {};
+
+        if (templateId) {
+            try {
+                // IMPORTANT: Transformation to ObjectId is REQUIRED for MongoDB Aggregation
+                query.template = new mongoose.Types.ObjectId(templateId);
+            } catch (e) {
+                // Fallback if ID is malformed
+                query.template = templateId;
+            }
+        }
+
+
+        if (search) {
+            // Search in uniqueId or common data fields
+            // We convert the map to an array of objects for easier searching if it were an aggregation, 
+            // but for now we search uniqueId and a few common fields
+            query.$or = [
+                { uniqueId: { $regex: search, $options: 'i' } },
+                { 'data.NAME': { $regex: search, $options: 'i' } },
+                { 'data.EMAIL': { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        if (startDate || endDate) {
+            query.createdAt = {};
+            if (startDate) {
+                const start = new Date(startDate);
+                start.setHours(0, 0, 0, 0);
+                query.createdAt.$gte = start;
+            }
+            if (endDate) {
+                const end = new Date(endDate);
+                end.setHours(23, 59, 59, 999);
+                query.createdAt.$lte = end;
+            }
+        }
+
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        const sortBy = req.query.sortBy || 'createdAt';
+        const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+
+        let sortKey = sortBy;
+        if (sortBy === 'template') sortKey = 'template.name';
+
+        const total = await Document.countDocuments(query);
+        const documents = await Document.aggregate([
+            { $match: query },
+            {
+                $lookup: {
+                    from: 'templates',
+                    localField: 'template',
+                    foreignField: '_id',
+                    as: 'template'
+                }
+            },
+            { $unwind: { path: '$template', preserveNullAndEmptyArrays: true } },
+            { $sort: { [sortKey]: sortOrder } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $project: {
+                    uniqueId: 1,
+                    data: 1,
+                    filePath: 1,
+                    createdAt: 1,
+                    'template.name': 1,
+                    'template._id': 1
+                }
+            }
+        ]);
+
+        res.json({
+            documents,
+            total,
+            pages: Math.ceil(total / limit),
+            currentPage: page
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+module.exports = router;
+
+
