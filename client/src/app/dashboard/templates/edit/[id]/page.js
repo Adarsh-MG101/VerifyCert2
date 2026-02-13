@@ -192,8 +192,6 @@ export default function TemplateEditorPage() {
                 c: "forcesave"
             });
 
-            showAlert('Save Requested', 'The Document Server has been notified to save your changes.', 'info');
-
             // Give it a few seconds then check status or just assume it happened
             setTimeout(() => {
                 setSaving(false);
