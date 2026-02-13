@@ -316,7 +316,7 @@ export default function ExistingTemplatesPage() {
                                                         <Link
                                                             href={`/dashboard/generate?templateId=${t._id}`}
                                                             className={`h-8 px-4 flex items-center justify-center border text-[10px] font-bold rounded-lg transition-all duration-300 active:scale-95 leading-none cursor-pointer ${t.enabled !== false
-                                                                ? 'bg-primary text-white border-primary/30 hover:shadow-lg hover:shadow-primary/30 hover:ring-2 hover:ring-primary/40 hover:scale-105'
+                                                                ? 'text-primary bg-primary/5 border-primary/20 hover:bg-primary/10 hover:border-primary/40 hover:scale-105 shadow-sm'
                                                                 : 'bg-white/5 text-gray-600 border-white/5 cursor-not-allowed pointer-events-none'}`}
                                                         >
                                                             Use Template
