@@ -168,6 +168,7 @@ router.get('/config/:templateId', auth, async (req, res) => {
                     plugins: false,
                     toolbarNoTabs: false,
                     uiTheme: 'theme-light',
+                    zoom: -1,
                 }
             },
             documentType: 'word',
