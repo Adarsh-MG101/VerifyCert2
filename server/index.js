@@ -50,6 +50,7 @@ const seedAdmin = async () => {
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api', require('./routes/index'));
 app.use('/api/onlyoffice', require('./routes/onlyoffice'));
+app.use('/api/ai', require('./routes/ai'));
 app.get('/', (req, res) => res.send('VerifyCert API Running'));
 
 // Init Uploads Folder

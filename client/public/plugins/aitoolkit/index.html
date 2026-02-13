@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>AI Toolkit</title>
+    <script type="text/javascript" src="https://onlyoffice.github.io/sdkjs-plugins/v1/plugins.js"></script>
+    <style>
+        body { font-family: sans-serif; display: none; }
+    </style>
+</head>
+<body>
+    <script>
+        (function(window, undefined) {
+            window.Asc.plugin.init = function() {
+                // Add AI items to the context menu
+                window.Asc.plugin.attachContextMenuClickEvent('ai_toolkit_fix_grammar', function() {
+                    processText('Fix grammar and spelling');
+                });
+                window.Asc.plugin.attachContextMenuClickEvent('ai_toolkit_professional', function() {
+                    processText('Make this sound more professional and official');
+                });
+                window.Asc.plugin.attachContextMenuClickEvent('ai_toolkit_summarize', function() {
+                    processText('Summarize this text concisely');
+                });
+
+                function processText(command) {
+                    // 1. Get selected text
+                    window.Asc.plugin.executeMethod("GetSelectedText", [], function(text) {
+                        if (!text || text.trim().length === 0) return;
+
+                        // 2. Clear current selection or show loading if needed (not easily possible with context menu replacement)
+                        
+                        // 3. Call our backend AI API
+                        const token = localStorage.getItem('token'); // Retrieve token from parent localStorage if possible or pass via postMessage
+                        
+                        // Since we are in an iframe, we might need the token passed from the editor page
+                        // For now, let's assume the editor page handled authentication or use a custom header
+                        
+                        // Actually, easier to use message to parent to make the request
+                        window.parent.postMessage({
+                            type: 'ai_toolkit_request',
+                            text: text,
+                            command: command
+                        }, '*');
+                    });
+                }
+            };
+
+            window.Asc.plugin.button = function(id) {
+                this.executeCommand("close", "");
+            };
+
+            // Listener for the response from the parent
+            window.addEventListener('message', function(event) {
+                if (event.data.type === 'ai_toolkit_response') {
+                    const result = event.data.result;
+                    if (result) {
+                        // Replace the selected text with the AI result
+                        window.Asc.plugin.executeMethod("PasteText", [result]);
+                    }
+                }
+            });
+
+            // This tells OnlyOffice what to show in the context menu
+            window.Asc.plugin.onContextMenuShow = function(options) {
+                if (options.type === "Selection") {
+                    this.executeMethod("AddContextMenuItem", [
+                        {
+                            "id": "ai_toolkit",
+                            "text": "✨ AI Toolkit",
+                            "items": [
+                                { "id": "ai_toolkit_fix_grammar", "text": "Fix Grammar & Spelling" },
+                                { "id": "ai_toolkit_professional", "text": "Make Professional" },
+                                { "id": "ai_toolkit_summarize", "text": "Summarize" }
+                            ]
+                        }
+                    ]);
+                }
+            };
+
+        })(window, undefined);
+    </script>
+</body>
+</html>

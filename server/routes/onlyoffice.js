@@ -165,10 +165,17 @@ router.get('/config/:templateId', auth, async (req, res) => {
                         url: ''
                     },
                     macros: false,
-                    plugins: false,
                     toolbarNoTabs: false,
                     uiTheme: 'theme-light',
                     zoom: -1,
+                },
+                plugins: {
+                    autostart: [
+                        "asc.{6B50059E-9A97-4081-BE2C-35C3E002B376}"
+                    ],
+                    pluginsData: [
+                        `${process.env.BASE_URL || 'http://localhost:3000'}/plugins/aitoolkit/config.json`
+                    ]
                 }
             },
             documentType: 'word',

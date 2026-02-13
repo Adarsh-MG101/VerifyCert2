@@ -91,6 +91,37 @@ export default function TemplateEditorPage() {
         };
     }, [templateInfo?.onlyofficeUrl]);
 
+    // Listen for messages from the AI Toolkit plugin
+    useEffect(() => {
+        const handleMessage = async (event) => {
+            if (event.data.type === 'ai_toolkit_request') {
+                const { text, command } = event.data;
+                console.log('🤖 AI Toolkit Request Received:', command);
+
+                try {
+                    // Import post service dynamically or use axios directly
+                    const { post } = await import('@/services/apiService');
+                    const response = await post('/api/ai/edit', { text, command });
+
+                    // Send the result back to the plugin iframe
+                    const editorIframe = document.getElementsByTagName('iframe')[0];
+                    if (editorIframe && editorIframe.contentWindow) {
+                        editorIframe.contentWindow.postMessage({
+                            type: 'ai_toolkit_response',
+                            result: response.result
+                        }, '*');
+                    }
+                } catch (err) {
+                    console.error('AI Processing Failed:', err);
+                    showAlert('AI Error', 'Failed to process text with AI.', 'error');
+                }
+            }
+        };
+
+        window.addEventListener('message', handleMessage);
+        return () => window.removeEventListener('message', handleMessage);
+    }, [showAlert]);
+
     // Initialize the editor
     useEffect(() => {
         if (!scriptLoaded || !editorConfig || editorReady) return;

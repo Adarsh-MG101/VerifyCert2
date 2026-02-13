@@ -1,0 +1,18 @@
+{
+    "name": "AI Toolkit",
+    "guid": "asc.{6B50059E-9A97-4081-BE2C-35C3E002B376}",
+    "version": "1.0.0",
+    "variations": [
+        {
+            "description": "AI-powered text editing and improvement",
+            "url": "index.html",
+            "isVisual": true,
+            "isModal": false,
+            "isInsideMode": true,
+            "initDataType": "text",
+            "initData": "",
+            "buttons": [],
+            "ContextMenu": true
+        }
+    ]
+}
