@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useUI } from '@/context/UIContext';
 import Link from 'next/link';
-import { Card, Button } from '@/components';
+import { Card, Button, Modal } from '@/components';
 import { getEditorConfig, refreshTemplate } from '@/services/onlyofficeService';
 
 export default function TemplateEditorPage() {
@@ -21,6 +21,7 @@ export default function TemplateEditorPage() {
     const [saving, setSaving] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
     const [saved, setSaved] = useState(false);
+    const [showSyncModal, setShowSyncModal] = useState(false);
     const editorRef = useRef(null);
     const containerRef = useRef(null);
     const scriptLoadedRef = useRef(false);
@@ -187,22 +188,36 @@ export default function TemplateEditorPage() {
         setSaving(true);
         try {
             // OnlyOffice's serviceCommand triggers a force save
-            // This will cause the Document Server to call our /callback route with status 6
             editorRef.current.serviceCommand('forceSave', {
                 c: "forcesave"
             });
 
-            // Give it a few seconds then check status or just assume it happened
-            setTimeout(() => {
-                setSaving(false);
-                setSaved(true);
+            // Re-extract placeholders & updated thumbnail after forcing save
+            // We give it 3 seconds for the OnlyOffice callback to finish saving the file
+            setTimeout(async () => {
+                try {
+                    const result = await refreshTemplate(templateId);
+                    if (result.success) {
+                        setTemplateInfo(prev => ({
+                            ...prev,
+                            placeholders: result.placeholders
+                        }));
+                        setSaved(true);
+                        setShowSyncModal(true); // Open the sync popup
+                    }
+                } catch (err) {
+                    console.error('Auto-Sync failed:', err);
+                    showAlert('Save Successful, Sync Failed', 'Document saved, but could not refresh variables automatically.', 'warning');
+                } finally {
+                    setSaving(false);
+                }
             }, 3000);
         } catch (err) {
             console.error('Save failed:', err);
             showAlert('Save Failed', 'Could not communicate with the editor to trigger a save.', 'error');
             setSaving(false);
         }
-    }, [editorReady, showAlert]);
+    }, [editorReady, showAlert, templateId]);
 
     // Handle refresh (re-extract placeholders & thumbnail)
     const handleRefresh = useCallback(async () => {
@@ -419,6 +434,54 @@ export default function TemplateEditorPage() {
                     style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}
                 ></div>
             </div>
+            {/* Placeholder Sync Modal */}
+            <Modal
+                isOpen={showSyncModal}
+                onClose={() => setShowSyncModal(false)}
+                title="Save & Sync Successful"
+                maxWidth="max-w-md"
+            >
+                <div className="flex flex-col items-center text-center p-2">
+                    <div className="w-16 h-16 rounded-full bg-green-500/10 flex items-center justify-center mb-6">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-green-500">
+                            <path d="M20 6 9 17l-5-5" />
+                        </svg>
+                    </div>
+
+                    <h3 className="text-lg font-bold text-foreground mb-2">Variables Updated</h3>
+                    <p className="text-sm text-muted mb-8 italic">
+                        The template has been saved and the latest placeholders have been extracted.
+                    </p>
+
+                    <div className="w-full space-y-3 mb-8">
+                        <div className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg border border-border">
+                            <span className="text-xs font-medium text-muted uppercase tracking-widest">Found</span>
+                            <span className="text-sm font-bold text-primary">{templateInfo?.placeholders?.length || 0} Placeholders</span>
+                        </div>
+
+                        <div className="bg-gray-50/50 rounded-xl border border-border/60 p-4 max-h-48 overflow-y-auto custom-scrollbar">
+                            <div className="flex flex-wrap gap-2 justify-center">
+                                {templateInfo?.placeholders?.length > 0 ? (
+                                    templateInfo.placeholders.map((p, i) => (
+                                        <span key={i} className="px-2.5 py-1 bg-white border border-border rounded text-[10px] font-mono text-primary font-bold">
+                                            {p}
+                                        </span>
+                                    ))
+                                ) : (
+                                    <span className="text-xs text-muted italic">No variables found in document</span>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <Button
+                        onClick={() => setShowSyncModal(false)}
+                        className="w-full py-3"
+                    >
+                        Great, Thanks!
+                    </Button>
+                </div>
+            </Modal>
         </div>
     );
 }

@@ -12,7 +12,8 @@
             "initDataType": "text",
             "initData": "",
             "buttons": [],
-            "ContextMenu": true
+            "ContextMenu": true,
+            "initOnSelectionChanged": true
         }
     ]
 }
