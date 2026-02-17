@@ -28,6 +28,8 @@ VerifyCert is a premium document generation and verification system designed for
 
 ## 🏁 Getting Started
 
+For a comprehensive, step-by-step installation guide (including OnlyOffice & Docker instructions), please refer to the **[setup.md](./setup.md)** file.
+
 ### Prerequisites
 - Node.js (v18+)
 - MongoDB (Running locally or Atlas)
