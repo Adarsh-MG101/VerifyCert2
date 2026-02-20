@@ -8,6 +8,7 @@ const Activity = require('../models/Activity');
 
 // Register — creates an Organization and the User as owner
 router.post('/register', async (req, res) => {
+    console.log(`[Auth] Register attempt for: ${req.body.email}`);
     try {
         const { name, email, password, organizationName } = req.body;
 
@@ -58,6 +59,7 @@ router.post('/register', async (req, res) => {
 
 // Login
 router.post('/login', async (req, res) => {
+    console.log(`[Auth] Login attempt: ${req.body.email}`);
     try {
         const { email, password } = req.body;
 
@@ -125,6 +127,7 @@ router.post('/login', async (req, res) => {
 
 // Verify token (for frontend to check if logged in)
 router.get('/verify', async (req, res) => {
+    console.log('[Auth] Verifying token...');
     try {
         const token = req.headers.authorization?.split(' ')[1];
         if (!token) {
@@ -161,6 +164,7 @@ const auth = require('../middleware/auth');
 
 // Change Password
 router.post('/change-password', auth, async (req, res) => {
+    console.log(`[Auth] Change password request for user: ${req.user.userId}`);
     try {
         const { currentPassword, newPassword } = req.body;
 
@@ -190,6 +194,7 @@ router.post('/change-password', auth, async (req, res) => {
 
 // Get Activity Logs
 router.get('/activity', auth, async (req, res) => {
+    console.log(`[Auth] Fetching activity logs for user: ${req.user.userId}`);
     try {
         const activities = await Activity.find({ userId: req.user.userId })
             .sort({ timestamp: -1 })
@@ -202,6 +207,7 @@ router.get('/activity', auth, async (req, res) => {
 
 // Logout
 router.post('/logout', auth, async (req, res) => {
+    console.log(`[Auth] Logout request for user: ${req.user.userId}`);
     try {
         const lastSession = await Activity.findOne({
             userId: req.user.userId,

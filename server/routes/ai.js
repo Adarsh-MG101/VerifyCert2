@@ -7,6 +7,7 @@ const API_KEY = process.env.API_KEY;
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
 
 router.post('/edit', auth, async (req, res) => {
+    console.log(`[AI] Edit request received. Command: ${req.body.command}`);
     try {
         const { text, command } = req.body;
 

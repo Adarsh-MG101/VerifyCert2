@@ -12,6 +12,7 @@ router.use(auth, tenantScope);
 // 1. GET /api/organizations/me — Get current user's organization
 // ============================================================
 router.get('/me', async (req, res) => {
+    console.log(`[Org] Fetching current org for user: ${req.user.email}`);
     try {
         if (req.isSuperAdmin) {
             return res.json({ organization: null, message: 'Superadmin — no org scope' });
@@ -49,6 +50,7 @@ router.get('/me', async (req, res) => {
 //    Only org owners and admins can update
 // ============================================================
 router.put('/me', async (req, res) => {
+    console.log(`[Org] Updating current org for user: ${req.user.email}`);
     try {
         if (req.isSuperAdmin) {
             return res.status(400).json({ error: 'Superadmin does not belong to an organization' });
@@ -86,6 +88,7 @@ router.put('/me', async (req, res) => {
 // 3. GET /api/organizations/me/members — List org members
 // ============================================================
 router.get('/me/members', async (req, res) => {
+    console.log(`[Org] Fetching members for org: ${req.organizationId}`);
     try {
         if (req.isSuperAdmin) {
             return res.status(400).json({ error: 'Superadmin does not belong to an organization' });
@@ -106,6 +109,7 @@ router.get('/me/members', async (req, res) => {
 //    Only org owners and admins can invite
 // ============================================================
 router.post('/me/invite', async (req, res) => {
+    console.log(`[Org] Inviting user ${req.body.email} to org: ${req.organizationId}`);
     try {
         if (req.isSuperAdmin) {
             return res.status(400).json({ error: 'Superadmin does not belong to an organization' });
@@ -159,6 +163,7 @@ router.post('/me/invite', async (req, res) => {
 //    Only org owners can change roles
 // ============================================================
 router.patch('/me/members/:userId', async (req, res) => {
+    console.log(`[Org] Changing role for user ${req.params.userId} in org: ${req.organizationId}`);
     try {
         if (req.isSuperAdmin) {
             return res.status(400).json({ error: 'Superadmin does not belong to an organization' });
@@ -210,6 +215,7 @@ router.patch('/me/members/:userId', async (req, res) => {
 //    Only org owners and admins can remove members
 // ============================================================
 router.delete('/me/members/:userId', async (req, res) => {
+    console.log(`[Org] Removing user ${req.params.userId} from org: ${req.organizationId}`);
     try {
         if (req.isSuperAdmin) {
             return res.status(400).json({ error: 'Superadmin does not belong to an organization' });

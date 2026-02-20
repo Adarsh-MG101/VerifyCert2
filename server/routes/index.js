@@ -148,6 +148,7 @@ async function generateThumbnail(docxPath, outputId) {
 
 // 1. Upload Template (Protected + Tenant Scoped)
 router.post('/templates', auth, tenantScope, upload.single('file'), async (req, res) => {
+    console.log(`[Template] Uploading template: ${req.file?.originalname} for org: ${req.organizationId}`);
     let thumbnailPath = null;
     try {
         if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -197,6 +198,7 @@ router.post('/templates', auth, tenantScope, upload.single('file'), async (req, 
 
 // 2.3 Toggle Template Status (Protected + Tenant Scoped)
 router.patch('/templates/:id/toggle', auth, tenantScope, async (req, res) => {
+    console.log(`[Template] Toggling template status: ${req.params.id}`);
     try {
         const template = await Template.findById(req.params.id);
         if (!template) return res.status(404).json({ error: 'Template not found' });
@@ -210,6 +212,7 @@ router.patch('/templates/:id/toggle', auth, tenantScope, async (req, res) => {
     }
 });
 router.get('/templates', auth, tenantScope, async (req, res) => {
+    console.log(`[Template] Listing templates for org: ${req.organizationId}`);
     try {
         const { search, onlyEnabled } = req.query;
         let query = { ...req.tenantFilter() };
@@ -267,6 +270,7 @@ router.get('/templates', auth, tenantScope, async (req, res) => {
 
 // 2.5 Delete Template (Protected + Tenant Scoped)
 router.delete('/templates/:id', auth, tenantScope, async (req, res) => {
+    console.log(`[Template] Deleting template: ${req.params.id}`);
     try {
         const template = await Template.findById(req.params.id);
         if (!template) return res.status(404).json({ error: 'Template not found' });
@@ -295,6 +299,7 @@ router.delete('/templates/:id', auth, tenantScope, async (req, res) => {
 
 // 2.6 Get Stats (Protected + Tenant Scoped)
 router.get('/stats', auth, tenantScope, async (req, res) => {
+    console.log(`[Stats] Fetching stats for org: ${req.organizationId}`);
     try {
         const totalTemplates = await Template.countDocuments(req.tenantFilter());
         const totalDocuments = await Document.countDocuments(req.tenantFilter());
@@ -310,6 +315,7 @@ router.get('/stats', auth, tenantScope, async (req, res) => {
 });
 
 router.post('/generate', auth, tenantScope, async (req, res) => {
+    console.log(`[Generate] Generating document from template: ${req.body.templateId}`);
     try {
         const { templateId, data } = req.body;
         const template = await Template.findById(templateId);
@@ -512,6 +518,7 @@ router.post('/generate', auth, tenantScope, async (req, res) => {
 
 // 4. Verify Document
 router.get('/verify/:id', async (req, res) => {
+    console.log(`[Verify] Verifying document ID: ${req.params.id}`);
     try {
         // Case-insensitive search for the uniqueId
         const doc = await Document.findOne({
@@ -533,6 +540,7 @@ router.get('/verify/:id', async (req, res) => {
 
 // 5. Bulk Generate from CSV (Protected + Tenant Scoped)
 router.post('/generate-bulk', auth, tenantScope, upload.single('csvFile'), async (req, res) => {
+    console.log(`[Generate-Bulk] Processing bulk generation for template: ${req.body.templateId}`);
     try {
         if (!req.file) return res.status(400).json({ error: 'No CSV file uploaded' });
 
@@ -791,6 +799,7 @@ router.post('/generate-bulk', auth, tenantScope, upload.single('csvFile'), async
 
 // 6. Send Email with Certificate or ZIP (Protected + Tenant Scoped)
 router.post('/send-email', auth, tenantScope, async (req, res) => {
+    console.log(`[Email] Sending email for document: ${req.body.documentId} to: ${req.body.recipientEmail}`);
     try {
         const { documentId, recipientEmail } = req.body;
         let absolutePath;

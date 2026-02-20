@@ -126,6 +126,7 @@ async function generateThumbnail(docxPath, outputId) {
 //    Returns the OnlyOffice editor configuration for a template
 // ============================================================
 router.get('/config/:templateId', auth, tenantScope, async (req, res) => {
+    console.log(`[OnlyOffice] Fetching config for template: ${req.params.templateId}`);
     try {
         const template = await Template.findById(req.params.templateId);
         if (!template) return res.status(404).json({ error: 'Template not found' });
@@ -202,6 +203,7 @@ router.get('/config/:templateId', auth, tenantScope, async (req, res) => {
 //    Serves the actual DOCX file for OnlyOffice to load
 // ============================================================
 router.get('/file/:templateId', async (req, res) => {
+    console.log(`[OnlyOffice] Serving file for template: ${req.params.templateId}`);
     try {
         const template = await Template.findById(req.params.templateId);
         if (!template) return res.status(404).json({ error: 'Template not found' });
@@ -312,6 +314,7 @@ router.post('/callback/:templateId', async (req, res) => {
 //    Manually trigger a force save from the frontend
 // ============================================================
 router.post('/forcesave/:templateId', auth, tenantScope, async (req, res) => {
+    console.log(`[OnlyOffice] Requesting force save for template: ${req.params.templateId}`);
     try {
         const template = await Template.findById(req.params.templateId);
         if (!template) return res.status(404).json({ error: 'Template not found' });
@@ -330,6 +333,7 @@ router.post('/forcesave/:templateId', auth, tenantScope, async (req, res) => {
 //    (used after editing in OnlyOffice)
 // ============================================================
 router.post('/refresh/:templateId', auth, tenantScope, async (req, res) => {
+    console.log(`[OnlyOffice] Refreshing template data: ${req.params.templateId}`);
     try {
         const template = await Template.findById(req.params.templateId);
         if (!template) return res.status(404).json({ error: 'Template not found' });
