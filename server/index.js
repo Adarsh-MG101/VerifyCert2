@@ -26,14 +26,14 @@ mongoose.connect(process.env.MONGO_URI)
 // Admin Seeding Function
 const seedAdmin = async () => {
     try {
-        const adminEmail = process.env.ADMIN_EMAIL || 'admin@verifycert.com';
+        const adminEmail = process.env.ADMIN_EMAIL;
         const existingAdmin = await User.findOne({ email: adminEmail });
 
         if (!existingAdmin) {
             const admin = new User({
                 name: 'Admin',
                 email: adminEmail,
-                password: process.env.ADMIN_PASSWORD || 'Admin@123',
+                password: process.env.ADMIN_PASSWORD,
                 role: 'admin'
             });
             await admin.save();
