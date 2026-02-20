@@ -5,7 +5,7 @@ import axios from 'axios';
  * Centralized API configuration and HTTP client using Axios
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://159.89.205.91:3002';
 
 // Create axios instance
 const api = axios.create({
