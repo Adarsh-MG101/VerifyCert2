@@ -16,14 +16,15 @@ export const login = async (email, password) => {
 };
 
 /**
- * Register new user
+ * Register new user with organization
  * @param {string} name - User name
  * @param {string} email - User email
  * @param {string} password - User password
+ * @param {string} organizationName - Organization name
  * @returns {Promise<{message: string}>}
  */
-export const register = async (name, email, password) => {
-    return post('/api/auth/register', { name, email, password });
+export const register = async (name, email, password, organizationName) => {
+    return post('/api/auth/register', { name, email, password, organizationName });
 };
 
 /**

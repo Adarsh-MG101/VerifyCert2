@@ -33,6 +33,7 @@ const DashboardHeader = ({ user }) => {
         }
         localStorage.removeItem('token');
         localStorage.removeItem('user');
+        localStorage.removeItem('organization');
         window.location.href = '/';
     };
 

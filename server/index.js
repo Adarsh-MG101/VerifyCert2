@@ -23,7 +23,7 @@ mongoose.connect(process.env.MONGO_URI)
     })
     .catch(err => console.error('MongoDB connection error:', err));
 
-// Admin Seeding Function
+// Admin Seeding Function — creates a superadmin (no org, sees everything)
 const seedAdmin = async () => {
     try {
         const adminEmail = process.env.ADMIN_EMAIL;
@@ -31,15 +31,23 @@ const seedAdmin = async () => {
 
         if (!existingAdmin) {
             const admin = new User({
-                name: 'Admin',
+                name: 'Super Admin',
                 email: adminEmail,
                 password: process.env.ADMIN_PASSWORD,
-                role: 'admin'
+                role: 'superadmin'
+                // No organization — superadmin sees all orgs
             });
             await admin.save();
-            console.log('✅ Admin user created automatically');
+            console.log('✅ Superadmin user created automatically');
         } else {
-            console.log('ℹ️ Admin user already exists');
+            // If existing admin was old 'admin' role, upgrade to 'superadmin'
+            if (existingAdmin.role === 'admin') {
+                existingAdmin.role = 'superadmin';
+                await existingAdmin.save();
+                console.log('✅ Existing admin upgraded to superadmin');
+            } else {
+                console.log('ℹ️ Superadmin user already exists');
+            }
         }
     } catch (error) {
         console.error('❌ Error seeding admin:', error);
@@ -47,10 +55,12 @@ const seedAdmin = async () => {
 };
 
 // Routes
+app.use('/api/organizations', require('./routes/organizations'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api', require('./routes/index'));
 app.use('/api/onlyoffice', require('./routes/onlyoffice'));
 app.use('/api/ai', require('./routes/ai'));
+
 app.get('/', (req, res) => res.send('VerifyCert API Running'));
 
 // Init Uploads Folder

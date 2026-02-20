@@ -12,6 +12,7 @@ const mammoth = require('mammoth');
 
 const Template = require('../models/Template');
 const auth = require('../middleware/auth');
+const { tenantScope, verifyOwnership } = require('../middleware/tenantScope');
 
 // Middleware to log all requests to this router
 router.use((req, res, next) => {
@@ -124,10 +125,11 @@ async function generateThumbnail(docxPath, outputId) {
 // 1. GET /onlyoffice/config/:templateId
 //    Returns the OnlyOffice editor configuration for a template
 // ============================================================
-router.get('/config/:templateId', auth, async (req, res) => {
+router.get('/config/:templateId', auth, tenantScope, async (req, res) => {
     try {
         const template = await Template.findById(req.params.templateId);
         if (!template) return res.status(404).json({ error: 'Template not found' });
+        if (!verifyOwnership(template, req)) return res.status(403).json({ error: 'Access denied' });
 
         // The unique key forces OnlyOffice to pull a fresh copy when the document changes
         const docKey = `${template._id}_${Date.now()}`;
@@ -309,10 +311,11 @@ router.post('/callback/:templateId', async (req, res) => {
 // 4. POST /onlyoffice/forcesave/:templateId
 //    Manually trigger a force save from the frontend
 // ============================================================
-router.post('/forcesave/:templateId', auth, async (req, res) => {
+router.post('/forcesave/:templateId', auth, tenantScope, async (req, res) => {
     try {
         const template = await Template.findById(req.params.templateId);
         if (!template) return res.status(404).json({ error: 'Template not found' });
+        if (!verifyOwnership(template, req)) return res.status(403).json({ error: 'Access denied' });
 
         res.json({ success: true, message: 'Force save signal sent. OnlyOffice will trigger the callback.' });
     } catch (err) {
@@ -326,10 +329,11 @@ router.post('/forcesave/:templateId', auth, async (req, res) => {
 //    Re-extract placeholders and regenerate thumbnail
 //    (used after editing in OnlyOffice)
 // ============================================================
-router.post('/refresh/:templateId', auth, async (req, res) => {
+router.post('/refresh/:templateId', auth, tenantScope, async (req, res) => {
     try {
         const template = await Template.findById(req.params.templateId);
         if (!template) return res.status(404).json({ error: 'Template not found' });
+        if (!verifyOwnership(template, req)) return res.status(403).json({ error: 'Access denied' });
 
         const absolutePath = path.resolve(template.filePath);
         if (!fs.existsSync(absolutePath)) {

@@ -10,7 +10,8 @@ const UserSchema = new mongoose.Schema({
         match: [/^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/, 'Please fill a valid email address']
     },
     password: { type: String, required: true },
-    role: { type: String, enum: ['admin', 'user'], default: 'user' },
+    role: { type: String, enum: ['superadmin', 'user'], default: 'user' },
+    orgRole: { type: String, enum: ['owner', 'admin', 'member'], default: 'member' },
     organization: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization' },
     createdAt: { type: Date, default: Date.now }
 });

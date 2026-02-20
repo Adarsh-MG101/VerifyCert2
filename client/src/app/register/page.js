@@ -17,6 +17,7 @@ export default function RegisterPage() {
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [organizationName, setOrganizationName] = useState('');
     const [fieldErrors, setFieldErrors] = useState({});
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
@@ -28,15 +29,17 @@ export default function RegisterPage() {
         setFieldErrors({});
 
         // Validate Fields
-        const nameError = validateUsername(name, 30); // Using 30 for Full Name
+        const nameError = validateUsername(name, 30);
         const emailError = validateEmail(email);
         const passwordError = validatePassword(password);
+        const orgError = !organizationName.trim() ? 'Organization name is required' : null;
 
-        if (nameError || emailError || passwordError) {
+        if (nameError || emailError || passwordError || orgError) {
             setFieldErrors({
                 name: nameError,
                 email: emailError,
-                password: passwordError
+                password: passwordError,
+                organizationName: orgError
             });
             return;
         }
@@ -44,7 +47,7 @@ export default function RegisterPage() {
         setLoading(true);
 
         try {
-            await register(name, email, password);
+            await register(name, email, password, organizationName.trim());
             router.push('/login?registered=true');
         } catch (err) {
             console.error(err);
@@ -71,6 +74,18 @@ export default function RegisterPage() {
                     )}
 
                     <form onSubmit={handleRegister} className="space-y-6">
+                        <div>
+                            <Input
+                                label="Organization Name"
+                                type="text"
+                                placeholder="Your company or team name"
+                                value={organizationName}
+                                onChange={(e) => { setOrganizationName(e.target.value); if (fieldErrors.organizationName) setFieldErrors(prev => ({ ...prev, organizationName: null })); }}
+                                required
+                            />
+                            <ValidationError message={fieldErrors.organizationName} />
+                        </div>
+
                         <div>
                             <Input
                                 label="Full Name"

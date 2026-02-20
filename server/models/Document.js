@@ -5,7 +5,7 @@ const DocumentSchema = new mongoose.Schema({
     data: { type: Map, of: mongoose.Schema.Types.Mixed }, // Stores the filled values (Strings, Objects like QR code)
     filePath: { type: String }, // Path to generated PDF
     template: { type: mongoose.Schema.Types.ObjectId, ref: 'Template' },
-    organization: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization' },
+    organization: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true },
     createdAt: { type: Date, default: Date.now }
 });
 

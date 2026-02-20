@@ -47,6 +47,9 @@ function LoginContent() {
             const data = await login(email, password);
             localStorage.setItem('token', data.token);
             localStorage.setItem('user', JSON.stringify(data.user));
+            if (data.user.organization) {
+                localStorage.setItem('organization', JSON.stringify(data.user.organization));
+            }
             router.replace('/dashboard');
         } catch (err) {
             // Quiet the console for expected 401/403 auth errors to avoid the Dev Overlay 'Issue' badge

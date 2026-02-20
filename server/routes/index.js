@@ -19,6 +19,7 @@ const Template = require('../models/Template');
 const Document = require('../models/Document');
 const Organization = require('../models/Organization');
 const auth = require('../middleware/auth');
+const { tenantScope, verifyOwnership } = require('../middleware/tenantScope');
 const PizZip = require('pizzip');
 
 // Multer Setup
@@ -145,14 +146,16 @@ async function generateThumbnail(docxPath, outputId) {
     return `uploads/${outputId}.png`;
 }
 
-// 1. Upload Template (Protected)
-router.post('/templates', auth, upload.single('file'), async (req, res) => {
+// 1. Upload Template (Protected + Tenant Scoped)
+router.post('/templates', auth, tenantScope, upload.single('file'), async (req, res) => {
     let thumbnailPath = null;
     try {
         if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+        if (!req.organizationId) return res.status(403).json({ error: 'Superadmin cannot upload templates without an organization context' });
 
         const templateName = (req.body.name || req.file.originalname).replace(/\.docx$/i, '');
-        const existingTemplate = await Template.findOne({ name: templateName });
+        // Check uniqueness within the org only
+        const existingTemplate = await Template.findOne({ name: templateName, organization: req.organizationId });
 
         if (existingTemplate) {
             if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
@@ -174,7 +177,8 @@ router.post('/templates', auth, upload.single('file'), async (req, res) => {
             name: templateName,
             filePath: req.file.path,
             thumbnailPath: thumbnailPath,
-            placeholders: placeholders
+            placeholders: placeholders,
+            organization: req.organizationId
         });
 
         await template.save();
@@ -191,11 +195,12 @@ router.post('/templates', auth, upload.single('file'), async (req, res) => {
     }
 });
 
-// 2.3 Toggle Template Status (Protected)
-router.patch('/templates/:id/toggle', auth, async (req, res) => {
+// 2.3 Toggle Template Status (Protected + Tenant Scoped)
+router.patch('/templates/:id/toggle', auth, tenantScope, async (req, res) => {
     try {
         const template = await Template.findById(req.params.id);
         if (!template) return res.status(404).json({ error: 'Template not found' });
+        if (!verifyOwnership(template, req)) return res.status(403).json({ error: 'Access denied' });
 
         template.enabled = !template.enabled;
         await template.save();
@@ -204,10 +209,10 @@ router.patch('/templates/:id/toggle', auth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-router.get('/templates', auth, async (req, res) => {
+router.get('/templates', auth, tenantScope, async (req, res) => {
     try {
         const { search, onlyEnabled } = req.query;
-        let query = {};
+        let query = { ...req.tenantFilter() };
         if (search) {
             query.name = { $regex: search, $options: 'i' };
         }
@@ -260,11 +265,12 @@ router.get('/templates', auth, async (req, res) => {
     }
 });
 
-// 2.5 Delete Template (Protected)
-router.delete('/templates/:id', auth, async (req, res) => {
+// 2.5 Delete Template (Protected + Tenant Scoped)
+router.delete('/templates/:id', auth, tenantScope, async (req, res) => {
     try {
         const template = await Template.findById(req.params.id);
         if (!template) return res.status(404).json({ error: 'Template not found' });
+        if (!verifyOwnership(template, req)) return res.status(403).json({ error: 'Access denied' });
 
         // Delete the file
         if (fs.existsSync(template.filePath)) {
@@ -287,11 +293,11 @@ router.delete('/templates/:id', auth, async (req, res) => {
     }
 });
 
-// 2.6 Get Stats (Protected)
-router.get('/stats', auth, async (req, res) => {
+// 2.6 Get Stats (Protected + Tenant Scoped)
+router.get('/stats', auth, tenantScope, async (req, res) => {
     try {
-        const totalTemplates = await Template.countDocuments();
-        const totalDocuments = await Document.countDocuments();
+        const totalTemplates = await Template.countDocuments(req.tenantFilter());
+        const totalDocuments = await Document.countDocuments(req.tenantFilter());
 
         res.json({
             totalTemplates,
@@ -303,11 +309,12 @@ router.get('/stats', auth, async (req, res) => {
     }
 });
 
-router.post('/generate', auth, async (req, res) => {
+router.post('/generate', auth, tenantScope, async (req, res) => {
     try {
         const { templateId, data } = req.body;
         const template = await Template.findById(templateId);
         if (!template) return res.status(404).json({ error: 'Template not found' });
+        if (!verifyOwnership(template, req)) return res.status(403).json({ error: 'Access denied: template belongs to another organization' });
 
         const uniqueId = crypto.randomUUID();
 
@@ -490,7 +497,7 @@ router.post('/generate', auth, async (req, res) => {
             data: finalData,
             filePath: pdfFilename,
             template: template._id,
-            organization: req.user.organization // Keep track of which org created it
+            organization: req.organizationId
         });
         await newDoc.save();
 
@@ -524,14 +531,15 @@ router.get('/verify/:id', async (req, res) => {
     }
 });
 
-// 5. Bulk Generate from CSV (Protected)
-router.post('/generate-bulk', auth, upload.single('csvFile'), async (req, res) => {
+// 5. Bulk Generate from CSV (Protected + Tenant Scoped)
+router.post('/generate-bulk', auth, tenantScope, upload.single('csvFile'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ error: 'No CSV file uploaded' });
 
         const { templateId } = req.body;
         const template = await Template.findById(templateId);
         if (!template) return res.status(404).json({ error: 'Template not found' });
+        if (!verifyOwnership(template, req)) return res.status(403).json({ error: 'Access denied: template belongs to another organization' });
 
         console.log(`🚀 Starting Bulk Generation: Template "${template.name}", Request ID: ${crypto.randomUUID()}`);
 
@@ -717,7 +725,7 @@ router.post('/generate-bulk', auth, upload.single('csvFile'), async (req, res) =
                     data: finalData,
                     filePath: `uploads/batch_${batchId}/${uniqueId}.pdf`,
                     template: template._id,
-                    organization: req.user.organization
+                    organization: req.organizationId
                 });
                 await newDoc.save();
 
@@ -781,8 +789,8 @@ router.post('/generate-bulk', auth, upload.single('csvFile'), async (req, res) =
     }
 });
 
-// 6. Send Email with Certificate or ZIP
-router.post('/send-email', auth, async (req, res) => {
+// 6. Send Email with Certificate or ZIP (Protected + Tenant Scoped)
+router.post('/send-email', auth, tenantScope, async (req, res) => {
     try {
         const { documentId, recipientEmail } = req.body;
         let absolutePath;
@@ -799,6 +807,7 @@ router.post('/send-email', auth, async (req, res) => {
             // Case: Single Document
             const doc = await Document.findById(documentId).populate('template');
             if (!doc) return res.status(404).json({ error: 'Document not found' });
+            if (!verifyOwnership(doc, req)) return res.status(403).json({ error: 'Access denied' });
             absolutePath = path.join(__dirname, '..', doc.filePath);
             filename = `${doc.template.name}.pdf`;
             subject = `Your Certificate: ${doc.template.name}`;
@@ -841,17 +850,18 @@ router.post('/send-email', auth, async (req, res) => {
     }
 });
 
-// 2.7 Update Template Name (Protected)
-router.put('/templates/:id', auth, async (req, res) => {
+// 2.7 Update Template Name (Protected + Tenant Scoped)
+router.put('/templates/:id', auth, tenantScope, async (req, res) => {
     try {
         const { name } = req.body;
         if (!name) return res.status(400).json({ error: 'Name is required' });
 
         const template = await Template.findById(req.params.id);
         if (!template) return res.status(404).json({ error: 'Template not found' });
+        if (!verifyOwnership(template, req)) return res.status(403).json({ error: 'Access denied' });
 
-        // Check if another template already has this name
-        const existingTemplate = await Template.findOne({ name, _id: { $ne: req.params.id } });
+        // Check if another template in this org already has this name
+        const existingTemplate = await Template.findOne({ name, organization: req.organizationId, _id: { $ne: req.params.id } });
         if (existingTemplate) {
             return res.status(400).json({ error: 'A template with this name already exists' });
         }
@@ -864,11 +874,11 @@ router.put('/templates/:id', auth, async (req, res) => {
     }
 });
 
-// 7. List All Generated Documents (Protected)
-router.get('/documents', auth, async (req, res) => {
+// 7. List All Generated Documents (Protected + Tenant Scoped)
+router.get('/documents', auth, tenantScope, async (req, res) => {
     try {
         const { search, startDate, endDate, templateId } = req.query;
-        let query = {};
+        let query = { ...req.tenantFilter() };
 
         if (templateId) {
             try {

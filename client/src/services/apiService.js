@@ -40,6 +40,7 @@ api.interceptors.response.use(
             if (typeof window !== 'undefined') {
                 localStorage.removeItem('token');
                 localStorage.removeItem('user');
+                localStorage.removeItem('organization');
                 if (window.location.pathname !== '/login') {
                     window.location.href = '/login';
                 }
